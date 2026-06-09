@@ -1,0 +1,30 @@
+# Local infrastructure for Cerebro. One system: Postgres with the pgvector
+# extension (vector + tsvector + metadata/ACL all live here, per the plan).
+#
+#   docker compose up -d
+#   npm run db:migrate && npm run db:seed
+#   npm run start:dev
+#
+# The pgvector/pgvector image ships the extension preinstalled; `001_init.sql`
+# runs `CREATE EXTENSION IF NOT EXISTS vector`.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cerebro-postgres
+    environment:
+      POSTGRES_USER: cerebro
+      POSTGRES_PASSWORD: cerebro
+      POSTGRES_DB: cerebro
+    # Published on 5433 to avoid clashing with a local Postgres on the default 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - cerebro-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerebro -d cerebro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  cerebro-pgdata:
