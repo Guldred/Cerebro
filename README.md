@@ -159,6 +159,53 @@ page inherits space access). Mapping those to Entra groups + full deny/inheritan
 
 ---
 
+## Connecting a real source
+
+`npm run db:seed` ingests whatever `SEED_CONNECTOR` points at. Deletions are reconciled on each
+full crawl; re-running is idempotent (unchanged docs are skipped).
+
+**GitHub** — documentation files (README + `*.md`/`*.rst`/`*.txt`/…) plus a synthesized
+*repository-overview* document (description, language breakdown, topics, license, and recent commit
+activity) so you can ask "what is this project / what's it built with / is it still maintained?".
+Public repos work with **no token**; private repos and higher rate limits need a read-only PAT.
+
+```bash
+SEED_CONNECTOR=github GITHUB_REPOS=owner/repo1,owner/repo2 \
+  GITHUB_TOKEN=ghp_xxx        npm run db:seed   # token optional for public repos
+```
+
+**Confluence Cloud** — pages via REST/CQL, storage-format HTML normalized to Markdown, page
+read-restrictions captured as ACL principals.
+
+```bash
+SEED_CONNECTOR=confluence \
+  CONFLUENCE_BASE_URL=https://you.atlassian.net/wiki \
+  CONFLUENCE_EMAIL=you@co.com CONFLUENCE_API_TOKEN=xxx \
+  CONFLUENCE_SPACE_KEYS=ENG,LEGAL   npm run db:seed
+```
+
+## Real multilingual embeddings (bge-m3 via Ollama)
+
+The `fake` default proves the plumbing but does only lexical-overlap matching. For real semantic and
+cross-lingual retrieval, point the embedding provider at a local `bge-m3` (1024-dim, matches the
+schema). Either use the bundled compose profile, or a native Ollama you already run:
+
+```bash
+# Option A — compose profile (skip if you already run Ollama on :11434):
+docker compose --profile embeddings up -d ollama
+docker exec cerebro-ollama ollama pull bge-m3
+# Option B — native: ollama pull bge-m3
+
+# then seed + serve with it (re-embeds automatically; embedding_model is tracked):
+export EMBEDDING_PROVIDER=openai-compatible EMBEDDING_BASE_URL=http://localhost:11434/v1 \
+       EMBEDDING_MODEL=bge-m3 EMBEDDING_DIM=1024
+npm run db:seed && npm run start:dev
+```
+
+Switching models re-embeds on the next seed (the `embedding_model` column makes the idempotency
+check model-aware). For generated answers, set `LLM_PROVIDER=openai-compatible`,
+`LLM_BASE_URL=http://localhost:11434/v1`, `LLM_MODEL=<a local chat model, e.g. llama3.2>`.
+
 ## Project structure
 
 ```

@@ -6,11 +6,12 @@ import { IngestionService } from '../ingestion/ingestion.service';
 import { Connector } from '../ingestion/connectors/connector.interface';
 import { SampleConnector } from '../ingestion/connectors/sample/sample.connector';
 import { ConfluenceConnector } from '../ingestion/connectors/confluence/confluence.connector';
+import { GitHubConnector } from '../ingestion/connectors/github/github.connector';
 
 /**
  * Ingests a source through the real pipeline: normalize → chunk → embed → store.
  * Idempotent — re-running skips unchanged docs. Choose the source with
- * SEED_CONNECTOR=sample (default) | confluence.
+ * SEED_CONNECTOR=sample (default) | confluence | github.
  */
 function buildConnector(): Connector {
   const which = process.env.SEED_CONNECTOR ?? 'sample';
@@ -20,13 +21,23 @@ function buildConnector(): Connector {
         baseUrl: required('CONFLUENCE_BASE_URL'),
         email: required('CONFLUENCE_EMAIL'),
         apiToken: required('CONFLUENCE_API_TOKEN'),
-        spaceKeys: process.env.CONFLUENCE_SPACE_KEYS?.split(',').map((s) => s.trim()).filter(Boolean),
+        spaceKeys: list('CONFLUENCE_SPACE_KEYS'),
+      });
+    case 'github':
+      return new GitHubConnector({
+        token: process.env.GITHUB_TOKEN, // optional — public repos work without it
+        repos: list('GITHUB_REPOS') ?? [],
+        apiUrl: process.env.GITHUB_API_URL,
       });
     case 'sample':
       return new SampleConnector(path.join(process.cwd(), 'seed'));
     default:
       throw new Error(`Unknown SEED_CONNECTOR: ${which}`);
   }
+}
+
+function list(key: string): string[] | undefined {
+  return process.env[key]?.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 function required(key: string): string {
