@@ -1,5 +1,11 @@
 # Project Plan: AI Knowledge Layer
 
+> **v2 — reviewed & in implementation.** This plan has been through a multi-perspective review;
+> the prioritized findings and the full improvement backlog are in
+> [Plan_Review.md](Plan_Review.md). Corrections to provable contradictions and critical safety
+> items are folded in below. A runnable MVP vertical slice exists — see the repo
+> [README](../README.md). Codename: **Cerebro**.
+
 **Goal:** A central, vectorized knowledge layer that consolidates data from heterogeneous enterprise sources (Confluence, GitLab, MS Teams, and others), makes it semantically searchable, and serves as a knowledge base for an AI agent. Users receive answers **including a link to the source** for the respective original resource.
 
 ---
@@ -41,8 +47,10 @@ Settle these definitively in Phase 0 — they have the greatest leverage on arch
 | LLM & embedding hosting | Azure OpenAI (EU region) **or** self-hosted open-source models | GDPR; determines cost and data egress |
 | Multilingualism | Content is DE **and** EN → multilingual embedding model mandatory | wrong model = poor German retrieval |
 | Identity provider | Azure AD / Entra ID (M365 environment present) | basis for permission-aware search |
-| Confluence variant | Cloud vs. Data Center (different APIs) | determines connector implementation |
+| Confluence variant | **Commit to Cloud OR Data Center for the MVP now** (default: Cloud) — scope the other as a separately budgeted connector | it determines auth (OAuth/Forge vs. PAT), delta, webhook registration, permission APIs and rate limits — not a config flag |
 | Data sensitivity level | Assumption: mixed, partly access-restricted | decides whether permissions are needed from the MVP |
+| Agent/MCP consumer residency | EU-resident models only, unless DPO-approved carve-out | retrieved chunks are enterprise content; egress to a non-EU LLM defeats the residency NFR |
+| Trust domain | Single trust domain / single tenant — no hard data-isolation boundary | a tenant partition key + per-tenant index would be needed if this changes; do **not** build multi-tenancy now |
 
 ---
 
@@ -98,27 +106,29 @@ One loader per content type: HTML (Confluence storage format), Markdown, code, p
 
 ### 6.3 Embedding & Vector Store
 
-- **Embedding model:** multilingual, since content is DE + EN. Options: `bge-m3` or `multilingual-e5` (self-hosted, GDPR-friendly, also produce both dense and sparse vectors) or Azure OpenAI `text-embedding-3-large` (EU region). Self-hosted saves running costs, Azure saves operational effort — decide the trade-off in Phase 0.
-- **Vector store: pgvector in PostgreSQL.** Rationale: only **one** system to operate, metadata and permission filtering directly in SQL, an HNSW index for fast ANN search, and full-text search (`tsvector`) lives in the same DB. This keeps the stack lean and leverages existing Postgres/NestJS know-how. Trade-off: for very large corpora (tens of millions of chunks) or advanced hybrid features, a dedicated store (Qdrant, Weaviate) may be superior later — but pgvector is the pragmatic and migratable start.
+- **Embedding model:** multilingual, since content is DE + EN. **Default recommendation: `bge-m3` (1024-dim dense + native sparse, 8192-token context, EU-self-hostable)** — its sparse output also strengthens the hybrid lexical arm. Alternatives: `multilingual-e5` (note: requires `query:`/`passage:` prefixes — silent quality halving if omitted) or Azure OpenAI `text-embedding-3-large` (EU region). **Dimensionality constraint:** pgvector's `vector` type caps the **HNSW index at 2000 dimensions**; `text-embedding-3-large` is 3072-dim, so it requires `halfvec` (HNSW supports ≤4000 half-precision dims) or Matryoshka truncation to ≤2000, at ~2× storage/index cost. The chunker's tokenizer must match the chosen model. Self-hosted saves running costs but means operating GPU serving (vLLM/TGI); Azure saves operational effort — decide with a cost model in Phase 0.
+- **Vector store: pgvector in PostgreSQL.** Rationale: **SQL-native ACL/metadata filtering** (the `&&` permission predicate and `tsvector` live in the same transactional store, avoiding drift), an HNSW index for fast ANN search, and a clean migration path to a dedicated store later. It leverages existing Postgres/NestJS know-how. Note the overall footprint is **not** a single system — it also includes Redis (BullMQ), a self-hosted embedding server, a reranker server, the Entra ID dependency and Tika/unstructured workers; pgvector removes the *separate vector DB*, not the rest of the stack. Trade-off: for very large corpora (tens of millions of chunks) a dedicated store (Qdrant, Weaviate) may be superior later — but pgvector is the pragmatic and migratable start.
 
 ### 6.4 Retrieval Layer
 
-- **Hybrid search:** dense vector search (pgvector) + lexical search (Postgres FTS), fused via Reciprocal Rank Fusion. Captures both semantic proximity and exact terms/proper names.
-- **Metadata pre-filtering:** by source system and — crucially — by permission (see Chapter 7).
-- **Re-ranking:** a cross-encoder (`bge-reranker` self-hosted or Cohere Rerank) precisely reorders the top-k. This is often the biggest quality lever for manageable effort.
+- **Hybrid search:** dense vector search (pgvector) + lexical search, fused via **weighted** Reciprocal Rank Fusion (fixed `k≈60`, per-retriever weights tuned on the gold set; unweighted RRF can score below dense-only when the dense model dominates). For the lexical arm, prefer `bge-m3` native sparse vectors or a BM25 extension (ParadeDB / VectorChord-bm25) over Postgres `ts_rank`, which lacks IDF and does not decompound German compounds (e.g. *Datenschutzgrundverordnung*). Index **title + heading path + content** ("contextual chunk headers") so heading-only terms stay retrievable, and use OR-semantics for the lexical query. `k`, weights and top-k are tunable parameters the eval harness sweeps. *(MVP: implemented as pgvector cosine + Postgres FTS with the OR-rewrite and contextual headers; sparse/BM25 is the upgrade path.)*
+- **Metadata pre-filtering:** by source system and — crucially — by permission (see Chapter 7). Over HNSW the ACL predicate is **post-filtered**, so enable pgvector 0.8+ `hnsw.iterative_scan` with a measured `ef_search` budget to keep recall for narrow-permission users.
+- **Re-ranking:** a multilingual cross-encoder (`bge-reranker-v2-m3` self-hosted, or Cohere Rerank in a private VPC for residency) reorders the funnel (hybrid top-50 → rerank → top-5 to the LLM). Often the biggest quality lever for manageable effort; budget its latency against the p95 SLO.
 - **Output:** the best N chunks together with `source_url` and metadata to the generation layer.
 
 ### 6.5 RAG / Agent Layer
 
 The agent receives the retrieved evidence and a prompt instructing it to answer **exclusively from the provided context**, to substantiate every statement, and to say "not found" when the evidence is insufficient — this is the most effective measure against hallucinations. Every answer references its sources; the UI renders them as clickable links (`Source: [page title](url)`).
 
-A recommendation that fits your agentic approach: **expose the knowledge layer as an MCP server / tool.** Then any compatible agent (including Claude) can invoke the retrieval function as a tool, instead of hardwiring RAG. Orchestration kept lean via LlamaIndex or a custom NestJS implementation.
+**Untrusted content & faithfulness.** Indexed content is user-writable, so retrieved text is treated as **data, not instructions** (role-isolated/delimited context — implemented as an untrusted-data envelope in the grounded prompt). Rendered output is encoded; **citation links are allow-listed to known source hosts**; remote images are never auto-loaded; agent tool calls are gated behind policy. Write access to an indexed space is a privilege-escalation surface. Faithfulness and citation accuracy are **computed, gated** metrics (the model emits citations the system verifies are in-context; a post-generation NLI/LLM-judge gate can force abstention) — not prompt aspirations.
+
+A recommendation that fits your agentic approach: **expose the knowledge layer as an MCP server / tool.** Then any compatible agent can invoke the retrieval function as a tool, instead of hardwiring RAG. **Constraint:** because retrieved chunks are actual enterprise content, MCP/agent consumers must be **EU-resident models** to honour the residency NFR; using a non-EU-resident agent (e.g. a hosted US API) requires explicit DPO sign-off recorded in the Ch.4 table. Orchestration kept lean via a custom NestJS implementation. *(MVP: implemented — `cerebro_query`/`cerebro_search` MCP tools reuse the same retrieval/RAG services and require caller principals.)*
 
 ### 6.6 API & Interfaces
 
 - Internal API (REST/gRPC): `POST /query` (question → answer + citations) and `POST /search` (raw retrieval without generation).
 - As an MCP server for agent consumption.
-- **Auth:** SSO via Entra ID (OIDC); the user identity is propagated so retrieval can filter in a permission-aware manner.
+- **Auth:** SSO via Entra ID (OIDC); the end-user identity is propagated to retrieval on **every** path. **Invariant:** each MCP tool invocation must carry a per-user OAuth/OIDC token (not a shared service credential); the retrieval tool rejects any request lacking a resolvable end-user identity and **never returns results computed without an applied ACL filter**. A service-credential MCP call that bypasses the filter is the catastrophic permission-leakage case and is prohibited.
 
 ---
 
@@ -126,15 +136,17 @@ A recommendation that fits your agentic approach: **expose the knowledge layer a
 
 This is the most demanding and most frequently underestimated part. Without a clean solution you risk the most serious failure of an enterprise knowledge layer: a user getting to see, via the AI, content that is denied to them in the source system ("permission leakage").
 
-**Approach (recommended, early binding):** During ingestion, the authorized principals (groups/users) are stored as metadata per chunk. At query time, the user's group memberships are resolved from Entra ID and retrieval is hard-filtered on them via SQL (`WHERE acl_principals && :user_groups`). Fast and correct for the majority of cases.
+**Approach (recommended, early binding):** During ingestion, each connector's `resolvePermissions` computes the **effective resolved read-set** per chunk — flattening layered/inherited source permissions and resolving **deny-over-allow** (Confluence space+page restrictions and inheritance breaks; GitLab role/visibility/inherited subgroup access; Teams/SharePoint inheritance), mapping GitLab/Confluence principals into the **Entra namespace** via a principal-mapping table, expanding **transitive (nested) Entra groups**, and using reserved pseudo-principals (`PUBLIC`/`ALL_USERS`) for unbounded ACLs. Attachment ACLs are resolved at the **object level**, not inherited from the parent. At query time the user's resolved groups hard-filter retrieval via SQL (`WHERE acl_principals && :user_groups`).
+
+> A bare set-overlap test only models allow-lists, so deny/inheritance resolution above is **mandatory** — not optional. **Fail-closed invariants:** if no user groups resolve (Entra error/timeout) → empty result; an empty chunk ACL is treated as non-public unless explicitly certified public. **Filtered-ANN caveat:** over an HNSW index this predicate is post-filtered, so selective users can silently receive far fewer than _k_ results — mitigate with pgvector 0.8+ `hnsw.iterative_scan` and/or partial indexes keyed by a coarse ACL domain, and track **Recall@k segmented by permission breadth**. These become automated Phase-2 exit-gate tests (deny-over-allow, inheritance break, attachment-vs-page divergence, cross-source mapping, fail-closed-on-Entra-outage).
 
 **Supplement (late binding) for especially sensitive areas:** an additional live check of retrieved hits against the current source permission — more accurate with rapidly changing rights, but slower. Pragmatically: early binding with periodic ACL refresh as the default, late binding optional for defined spaces.
 
 **Further points:**
 
-- **GDPR:** EU data residency, deletion pipeline (source document deleted → corresponding vectors removed), data processing agreements with cloud providers, audit logging.
-- **Secrets:** source API tokens in a secret manager (Vault / Azure Key Vault), never in code.
-- **Audit:** logging of queries (who/what) for traceability — weighed against data minimization, to be coordinated with the DPO.
+- **GDPR — erasure pipeline (scheduled in Phase 2, owned, sized):** EU data residency plus a full erasure pipeline covering (a) document deletion **and** person-level DSAR erasure spanning chunks across documents; (b) scheduled **VACUUM/REINDEX** so HNSW data is physically zeroed, not just tombstoned (pgvector defers physical deletion until VACUUM); (c) a backup/WAL/PITR re-erasure or rolling-retention policy so restores don't resurrect erased data; (d) propagation to all derived copies (answer caches, reranker payloads, BullMQ job payloads, audit logs, provider retention); (e) a stated erasure-completion SLA. Plus DPAs/SCCs (CLOUD Act exposure even in an EU region) and approved Azure OpenAI zero-data-retention.
+- **Secrets & ingestion identity:** source API tokens are **least-privilege, read-only, scoped per connector**, in a secret manager (Vault / Azure Key Vault), rotated, and monitored. Because the design indexes everything then filters, this identity is a super-user and the ACL filter is the sole barrier — a token leak compromises the whole corpus.
+- **Audit:** an audit log records the **ACL decision** (user, chunk ids, allow/deny, timestamp) — sufficient to prove non-leakage while minimizing stored query/answer content (query text can be Art. 9 special-category data), with bounded retention and restricted access. **German works-council co-determination (Betriebsrat/Mitbestimmung)** on employee-monitoring data is a Phase-0 legal gate alongside DPO sign-off — it can block go-live.
 
 ---
 
@@ -157,13 +169,15 @@ This is the most demanding and most frequently underestimated part. Without a cl
 
 *Effort estimates indicative for a team of ~2–3 people; adjust to your capacity before starting.*
 
-**Phase 0 — Discovery & Setup (1–2 weeks).** Source prioritization, API access/tokens, GDPR sign-off, decision on embedding/LLM hosting, set up infrastructure. *Outcome:* architecture decisions made, a running base infrastructure.
+*Note: GDPR sign-off / DPAs is an external critical-path dependency (legal/procurement run weeks-to-months) — start it in Phase 0 and run a parallel non-sensitive track so it doesn't block the program. Effort estimates are optimistic; treat them as lower bounds.*
 
-**Phase 1 — MVP, one source end-to-end (3–4 weeks).** Confluence connector → pipeline → pgvector → basic RAG → lean UI or Teams bot. Initially without permission logic (non-sensitive space). *Outcome:* a robust proof that retrieval and citation quality hold up.
+**Phase 0 — Discovery & Setup (1–2 weeks).** Source prioritization, API access/tokens, GDPR sign-off + Betriebsrat gate, decision on embedding/LLM hosting **gated by a Recall@k threshold** on the gold set, a **cost/TCO model** (initial-crawl tokens, per-query inference, storage, GPU run-rate) with a budget ceiling, and base infrastructure. **Stand up the eval harness + gold set here** (moved earlier — see below). *Outcome:* architecture decisions made and measured, running base infrastructure.
 
-**Phase 2 — Permissions + second source (3–4 weeks).** ACL-aware retrieval, Entra ID integration, connect GitLab. The make-or-break phase for enterprise use. *Outcome:* demonstrably permission-safe delivery.
+**Phase 1 — MVP, one source end-to-end (3–4 weeks).** Confluence connector → pipeline → pgvector → basic RAG → lean UI or Teams bot. Permission **enforcement** deferred (non-sensitive space, certified PII-free by a named owner) but the **full ACL schema ships day one** (per-chunk principals, principal-mapping table, version/content_hash columns, tombstones) to avoid a later full re-ingest. MVP exit criteria also include per-query structured logs (chunk ids/scores), per-stage latency tracing (ACL→hybrid→RRF→rerank→LLM), token/cost counters, and a 👍/👎 widget. *Outcome:* a Recall@k/MRR + faithfulness eval harness running in CI on an SME-built gold set that **labels relevant chunks** (not just QA pairs) and includes cross-lingual (DE↔EN) and ACL-filtered cases, gating the embedding-model/chunking decision.
 
-**Phase 3 — Quality & multi-source (3–4 weeks).** Hybrid search + re-ranking, connect Teams, incremental delta syncs via webhooks, build an eval harness. *Outcome:* measurably improved answer quality, current data.
+**Phase 2 — Permissions + erasure + second source (split into milestones).** ACL-aware retrieval with deny/inheritance resolution, Entra ID integration + principal mapping, the GDPR erasure pipeline (owned, sized, audited), then connect GitLab. The make-or-break phase for enterprise use. *Outcome:* demonstrably permission-safe delivery with passing ACL exit-gate tests.
+
+**Phase 3 — Quality & multi-source (3–4 weeks).** Re-ranking funnel, stronger lexical arm (sparse/BM25), connect Teams, incremental delta syncs via webhooks + reconciliation sweeps. *Outcome:* measurably improved answer quality, current data. *(The eval harness was moved to Phase 0/1 — it must exist before the most expensive-to-reverse decisions.)*
 
 **Phase 4 — Hardening, scaling & operations (ongoing).** Monitoring, cost control, feedback loop, automated re-indexing, load tests.
 
