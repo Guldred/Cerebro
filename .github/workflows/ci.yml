@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test-eval:
+    runs-on: ubuntu-latest
+
+    # Postgres + pgvector as a service container, matching docker-compose.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cerebro
+          POSTGRES_PASSWORD: cerebro
+          POSTGRES_DB: cerebro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cerebro -d cerebro"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The service is published on 5432 in CI (no local Postgres to clash with).
+      DATABASE_URL: postgres://cerebro:cerebro@localhost:5432/cerebro
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Migrate + seed
+        run: |
+          npm run db:migrate
+          npm run db:seed
+
+      # The integration gate: hybrid retrieval + RAG over a real pgvector store.
+      # Fails the build on any ACL leak, abstention regression, or Recall@k drop.
+      - name: Eval (Recall@k + ACL-leak gate)
+        run: npm run eval
