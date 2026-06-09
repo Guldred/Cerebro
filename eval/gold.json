@@ -1,0 +1,52 @@
+{
+  "description": "Cerebro evaluation gold standard. Labels relevant DOCUMENTS (not just QA pairs) per question, plus permission (ACL) and cross-lingual cases. Built early (plan §13 / critique P1) so retrieval/chunking/model changes are gated, not guessed. Cross-lingual cases require a real multilingual embedding model and are reported separately under the fake provider.",
+  "topK": 8,
+  "recallThreshold": 0.75,
+  "cases": [
+    {
+      "id": "db-setup-en",
+      "question": "How do I set up the local Postgres database for development?",
+      "principals": ["public"],
+      "relevantDocIds": ["confluence:ENG-ONBOARDING"]
+    },
+    {
+      "id": "vpn-de",
+      "question": "Wie richte ich das Firmen-VPN auf meinem Laptop ein?",
+      "principals": ["public"],
+      "relevantDocIds": ["confluence:IT-VPN"]
+    },
+    {
+      "id": "rollback-en",
+      "question": "What is the rollback procedure when a deployment fails?",
+      "principals": ["public"],
+      "relevantDocIds": ["gitlab:platform/runbooks/deployment"]
+    },
+    {
+      "id": "loeschung-de",
+      "question": "Welche Frist gilt für das Recht auf Löschung personenbezogener Daten?",
+      "principals": ["public"],
+      "relevantDocIds": ["confluence:LEGAL-DSGVO"]
+    },
+    {
+      "id": "salary-denied-acl",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": ["public"],
+      "relevantDocIds": [],
+      "forbiddenDocIds": ["confluence:HR-SALARY-BANDS"],
+      "expectNotFound": true
+    },
+    {
+      "id": "salary-allowed-acl",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": ["hr"],
+      "relevantDocIds": ["confluence:HR-SALARY-BANDS"]
+    },
+    {
+      "id": "residency-crosslingual",
+      "question": "Where is personal data stored, and is it kept within the EU?",
+      "principals": ["public"],
+      "relevantDocIds": ["confluence:LEGAL-DSGVO"],
+      "crossLingual": true
+    }
+  ]
+}
