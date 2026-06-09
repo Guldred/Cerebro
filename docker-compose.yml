@@ -26,5 +26,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # Optional local embedding server (OpenAI-compatible) for real multilingual
+  # semantic retrieval with bge-m3 — no cloud keys. Start it with the profile:
+  #   docker compose --profile embeddings up -d ollama
+  #   docker exec cerebro-ollama ollama pull bge-m3
+  # then set EMBEDDING_PROVIDER=openai-compatible, EMBEDDING_BASE_URL=http://localhost:11434/v1,
+  # EMBEDDING_MODEL=bge-m3 in .env and re-run `npm run db:seed`.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cerebro-ollama
+    profiles: ["embeddings"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - cerebro-ollama:/root/.ollama
+
 volumes:
   cerebro-pgdata:
+  cerebro-ollama:

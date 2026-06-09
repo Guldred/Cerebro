@@ -25,7 +25,7 @@ The architecture for the full system is in place as interfaces; what's wired vs.
 |---|---|---|
 | Embeddings | deterministic local `fake` (1024-dim, no keys) | Azure OpenAI (EU), self-hosted `bge-m3` via OpenAI-compatible endpoint |
 | Generation | deterministic extractive `fake` (grounded, abstains) | Azure OpenAI, self-hosted EU LLM |
-| Connectors | `sample` (reads `seed/*.md`) | Confluence (skeleton w/ REST/CQL plan), GitLab, Teams |
+| Connectors | `sample` (reads `seed/*.md`) + **Confluence Cloud** (REST/CQL, mock-tested) | GitLab, Teams; Confluence deny/inheritance + Entra principal mapping (Phase 2) |
 | Retrieval | hybrid vector+FTS, RRF, HNSW iterative-scan, ACL pre-filter | cross-encoder reranking, BM25 lexical arm |
 | Permissions | per-chunk `acl_principals`, hard SQL filter, fail-closed | Entra ID OIDC, deny/inheritance resolution, principal mapping (Phase 2) |
 | Interfaces | REST `/query` `/search` `/health`, MCP `cerebro_query`/`cerebro_search` | webhooks, BullMQ delta sync, reranker |
@@ -122,8 +122,40 @@ EMBEDDING_MODEL=bge-m3
 EMBEDDING_DIM=1024
 ```
 
-Then re-seed so vectors are rebuilt under the new model. (Production: blue/green re-index — see
-`embedding_model` column and Plan_Review P2.)
+Re-seeding then **re-embeds automatically**: ingestion skips a document only when its content hash
+*and* its stored `embedding_model` both match, so a model switch forces a rebuild (no stale
+mixed-model vectors). Production: blue/green re-index — see Plan_Review P2.
+
+#### Quickest path: bge-m3 via Ollama
+
+```bash
+# Option A — Docker (no local Ollama):
+docker compose --profile embeddings up -d ollama
+docker exec cerebro-ollama ollama pull bge-m3
+# Option B — native Ollama already running on :11434:
+ollama pull bge-m3
+
+# point Cerebro at it and re-embed
+EMBEDDING_PROVIDER=openai-compatible EMBEDDING_BASE_URL=http://localhost:11434/v1 \
+  EMBEDDING_MODEL=bge-m3 EMBEDDING_DIM=1024 npm run db:seed
+```
+
+With `bge-m3`, retrieval becomes genuinely semantic and **cross-lingual** (an English query retrieves
+a German document) — which the deterministic `fake` provider cannot do.
+
+### Ingesting from Confluence
+
+```bash
+SEED_CONNECTOR=confluence \
+  CONFLUENCE_BASE_URL=https://your-domain.atlassian.net/wiki \
+  CONFLUENCE_EMAIL=you@corp.com CONFLUENCE_API_TOKEN=*** \
+  CONFLUENCE_SPACE_KEYS=ENG,LEGAL \
+  npm run db:seed
+```
+
+Pages are fetched via REST/CQL, storage-format HTML is normalized, and page read-restrictions become
+namespaced ACL principals (`confluence-group:*`, `confluence-user:*`, or `confluence-space:*` when a
+page inherits space access). Mapping those to Entra groups + full deny/inheritance is Phase 2.
 
 ---
 
