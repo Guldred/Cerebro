@@ -97,6 +97,29 @@ describe('GitHubConnector', () => {
     expect(readme.body).toContain('hello world');
   });
 
+  it('LEAK GUARD CONTRACT: an emptied file is still emitted (with empty body), never dropped', async () => {
+    // Dropping it would leave the previous version's chunks live under the
+    // old ACL — the ingestion leak guard can only run on an EMITTED document.
+    const fetchFn = jest.fn(async (url: string, _init?: unknown) => {
+      if (url.includes('/languages')) return httpOk(languages);
+      if (url.includes('/commits')) return httpOk(commits);
+      if (url.includes('/git/trees/')) return httpOk(tree);
+      if (url.includes('/contents/')) {
+        const path = decodeURIComponent(url.match(/\/contents\/(.+?)\?/)![1]);
+        return httpOk({
+          content: path === 'README.md' ? '' : Buffer.from('# doc\n\ncontent').toString('base64'),
+          encoding: 'base64',
+        });
+      }
+      return httpOk(repo());
+    });
+    const c = new GitHubConnector(config, fetchFn as never);
+    const docs = await c.initialCrawl();
+    const readme = docs.find((d) => d.title === 'README.md')!;
+    expect(readme).toBeDefined();
+    expect(readme.body).toBe('');
+  });
+
   it('marks private-repo content with a repo-scoped ACL principal', async () => {
     const c = new GitHubConnector(config, makeFetch({ private: true }) as never);
     const [overview] = await c.initialCrawl();

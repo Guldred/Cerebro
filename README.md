@@ -25,7 +25,7 @@ The architecture for the full system is in place as interfaces; what's wired vs.
 |---|---|---|
 | Embeddings | deterministic local `fake` (1024-dim, no keys) | Azure OpenAI (EU), self-hosted `bge-m3` via OpenAI-compatible endpoint |
 | Generation | deterministic extractive `fake` (grounded, abstains) | Azure OpenAI, self-hosted EU LLM |
-| Connectors | `sample` (reads `seed/*.md`) + **Confluence Cloud** (REST/CQL, deny/inheritance read-set) + **GitHub** | GitLab, Teams |
+| Connectors | `sample` (reads `seed/*.md`) + **Confluence Cloud** (REST/CQL, deny/inheritance read-set) + **GitHub** + **GitLab** (visibility-native ACLs) | Teams |
 | Retrieval | hybrid vector+FTS, RRF, HNSW iterative-scan, ACL pre-filter | cross-encoder reranking, BM25 lexical arm |
 | Permissions | per-chunk `acl_principals`, hard SQL filter, fail-closed; **Entra-shaped OIDC** (`AUTH_MODE`), **principal mapping** (query-time, fail-closed), deny/inheritance resolution, ACL refresh w/o re-embed, MCP identity hard-reject | Graph resolver for >200-group tokens, attachment-level ACLs, late-binding re-check |
 | Interfaces | REST `/query` `/search` `/health`, MCP `cerebro_query`/`cerebro_search` | webhooks, BullMQ delta sync, reranker |
@@ -235,6 +235,19 @@ SEED_CONNECTOR=github GITHUB_REPOS=owner/repo1,owner/repo2 \
   GITHUB_TOKEN=ghp_xxx        npm run db:seed   # token optional for public repos
 ```
 
+**GitLab** — documentation files plus a synthesized *project-overview* document, mirroring the
+GitHub connector. Project visibility maps directly onto the Phase-2 ACL model: `public` →
+`public`, `internal` → the reserved `all-users` principal (any authenticated caller), `private` →
+`gitlab-project:<path>` (granted via `principal_mappings`), and any unrecognized visibility
+**quarantines** the project's documents (fail-closed). Public projects need no token; private or
+internal ones need a `read_api` PAT.
+
+```bash
+SEED_CONNECTOR=gitlab GITLAB_PROJECTS=group/project1,group/sub/project2 \
+  GITLAB_TOKEN=glpat-xxx GITLAB_BASE_URL=https://gitlab.your-corp.com \
+  npm run db:seed   # token + base URL optional (default gitlab.com, public projects)
+```
+
 **Confluence Cloud** — pages via REST/CQL, storage-format HTML normalized to Markdown, page
 read-restrictions captured as ACL principals.
 
@@ -265,7 +278,8 @@ npm run db:seed && npm run start:dev
 
 Switching models re-embeds on the next seed (the `embedding_model` column makes the idempotency
 check model-aware). For generated answers, set `LLM_PROVIDER=openai-compatible`,
-`LLM_BASE_URL=http://localhost:11434/v1`, `LLM_MODEL=<a local chat model, e.g. llama3.2>`.
+`LLM_BASE_URL=http://localhost:11434/v1`, `LLM_MODEL=<a chat model your Ollama serves>` —
+verified live with `mistral:latest` (grounded prose + citations, permission-filtered).
 
 ## Project structure
 

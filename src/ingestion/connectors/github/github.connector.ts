@@ -52,7 +52,9 @@ export class GitHubConnector implements Connector {
     private readonly fetchFn: FetchFn = fetch as unknown as FetchFn,
   ) {
     if (!config.repos?.length) throw new Error('GitHubConnector requires at least one repo (owner/repo)');
-    this.apiUrl = (config.apiUrl ?? 'https://api.github.com').replace(/\/$/, '');
+    // `||` not `??`: dotenv turns a blank `GITHUB_API_URL=` line into an
+    // EMPTY STRING, which must still mean "default to api.github.com".
+    this.apiUrl = (config.apiUrl?.trim() || 'https://api.github.com').replace(/\/$/, '');
     this.docExtensions = new Set(config.docExtensions ?? DEFAULT_DOC_EXTENSIONS);
   }
 
@@ -112,7 +114,9 @@ export class GitHubConnector implements Connector {
         `/repos/${owner}/${name}/contents/${encodePath(entry.path)}?ref=${encodeURIComponent(repo.default_branch)}`,
       );
       const body = file.content ? Buffer.from(file.content, 'base64').toString('utf8') : '';
-      if (!body.trim()) continue;
+      // An EMPTIED file is still emitted (not skipped): the ingestion leak
+      // guard must see it to remove the previous version's chunks and rewrite
+      // the ACL — dropping it would leave stale content under the old ACL.
       docs.push({
         sourceSystem: this.sourceSystem,
         externalId: `${repo.full_name}:${entry.path}`,
