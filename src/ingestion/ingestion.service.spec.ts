@@ -82,6 +82,56 @@ describe('IngestionService quarantine (P1.1 fail-closed)', () => {
   });
 });
 
+describe('IngestionService empty-body leak guard (review finding: stale chunks under old ACL)', () => {
+  it('a STORED doc whose body empties + ACL tightens deletes the old chunks and persists the new ACL', async () => {
+    const h = harness();
+    // Previously ingested broadly readable version exists.
+    h.setStored({
+      content_hash: 'old-hash-of-nonempty-body',
+      acl_principals: ['public'],
+      acl_status: 'resolved',
+      embedding_model: 'fake-test',
+    });
+
+    const result = await h.service.ingestDocument(
+      doc({ body: '', aclStatus: 'failed', aclPrincipals: ['public'] }),
+    );
+    // NOT a silent skip: the stale chunks must be removed and the quarantine persisted.
+    expect(result).toMatchObject({ skipped: false, aclOnly: true, quarantined: true });
+    expect(h.queries.some((q) => q.sql.includes('DELETE FROM chunks'))).toBe(true);
+    const update = h.queries.find((q) => q.sql.includes('UPDATE documents'));
+    expect(update!.params![1]).toEqual([]); // zero principals
+    expect(update!.params![2]).toBe('failed');
+    expect(h.embedCalls).toHaveLength(0); // nothing to embed
+  });
+
+  it('a NEW doc with an empty body still skips (nothing stored, nothing to leak)', async () => {
+    const h = harness();
+    const result = await h.service.ingestDocument(doc({ body: '' }));
+    expect(result).toMatchObject({ skipped: true });
+    expect(h.queries.some((q) => q.sql.startsWith('DELETE') || q.sql.startsWith('UPDATE'))).toBe(false);
+  });
+
+  it('a still-quarantined unchanged doc reports quarantined on the skip path (stats integrity)', async () => {
+    const h = harness();
+    // First ingest the quarantined doc to learn its content hash.
+    await h.service.ingestDocument(doc({ aclStatus: 'failed' }));
+    const firstInsert = h.queries.find((q) => q.sql.includes('INSERT INTO documents'));
+    const hash = firstInsert!.params![11] as string;
+
+    h.setStored({
+      content_hash: hash,
+      acl_principals: [],
+      acl_status: 'failed',
+      embedding_model: 'fake-test',
+    });
+    await expect(h.service.ingestDocument(doc({ aclStatus: 'failed' }))).resolves.toMatchObject({
+      skipped: true,
+      quarantined: true,
+    });
+  });
+});
+
 describe('IngestionService.refreshAcls (revocation path, decoupled from content sync)', () => {
   function refreshHarness(storedDocs: Record<string, unknown>[]) {
     const queries: { sql: string; params?: unknown[] }[] = [];

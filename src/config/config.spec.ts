@@ -45,6 +45,32 @@ describe('loadConfig boot invariants', () => {
     expect(() => loadConfig()).toThrow(/requires AUTH_MODE=oidc/);
   });
 
+  it('a TYPO in CEREBRO_ENV refuses to boot — it must never silently run as development', () => {
+    process.env.CEREBRO_ENV = 'Producton';
+    expect(() => loadConfig()).toThrow(/CEREBRO_ENV must be development or production/);
+    process.env.CEREBRO_ENV = 'staging';
+    expect(() => loadConfig()).toThrow(/CEREBRO_ENV must be development or production/);
+  });
+
+  it('CEREBRO_ENV aliases normalize toward the safe direction (prod/PRODUCTION → production)', () => {
+    for (const value of ['prod', 'PRODUCTION', 'Production']) {
+      process.env.CEREBRO_ENV = value;
+      expect(() => loadConfig()).toThrow(/requires AUTH_MODE=oidc/);
+    }
+  });
+
+  it('production refuses a plaintext-http issuer or JWKS URL (on-path key substitution)', () => {
+    process.env.CEREBRO_ENV = 'production';
+    process.env.AUTH_MODE = 'oidc';
+    process.env.AUTH_OIDC_AUDIENCE = 'api://cerebro';
+    process.env.AUTH_OIDC_ISSUER = 'http://login.microsoftonline.com/t/v2.0';
+    expect(() => loadConfig()).toThrow(/AUTH_OIDC_ISSUER must be https/);
+
+    process.env.AUTH_OIDC_ISSUER = 'https://login.microsoftonline.com/t/v2.0';
+    process.env.AUTH_OIDC_JWKS_URL = 'http://login.microsoftonline.com/t/discovery/v2.0/keys';
+    expect(() => loadConfig()).toThrow(/AUTH_OIDC_JWKS_URL must be https/);
+  });
+
   it('production refuses ACL_ENFORCED=false', () => {
     process.env.CEREBRO_ENV = 'production';
     process.env.AUTH_MODE = 'oidc';

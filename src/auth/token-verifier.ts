@@ -47,6 +47,9 @@ export class OidcTokenVerifier implements TokenVerifier {
         audience: this.auth.audience,
         algorithms: ['RS256'],
         clockTolerance: this.auth.clockToleranceS,
+        // jose only VALIDATES exp when present — without this, a signed token
+        // missing exp would be accepted forever.
+        requiredClaims: ['exp'],
       });
       payload = result.payload;
     } catch (err) {

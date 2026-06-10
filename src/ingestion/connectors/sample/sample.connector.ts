@@ -65,6 +65,10 @@ export class SampleConnector implements Connector {
       contentType: String(data.content_type ?? 'text/markdown'),
       lang: data.lang ? String(data.lang) : undefined,
       aclPrincipals: normalizeAcl(data.acl_principals),
+      // `acl_status: failed` simulates a permission-resolution failure so the
+      // quarantine path (zero principals, invisible) runs through the REAL
+      // ingestion + SQL filter in the demo corpus and the eval.
+      aclStatus: data.acl_status === 'failed' ? 'failed' : undefined,
       body: content.trim(),
       sourceCreatedAt: toIso(data.created_at),
       sourceUpdatedAt: toIso(data.updated_at),

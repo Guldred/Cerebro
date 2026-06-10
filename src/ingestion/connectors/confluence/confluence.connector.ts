@@ -117,7 +117,7 @@ export class ConfluenceConnector implements Connector {
     return this.aclResolver.resolve({
       spaceKey: page.space?.key,
       restrictions: page.restrictions,
-      ancestorIds: (page.ancestors ?? []).map((a) => String(a.id)).filter((id) => id !== 'undefined'),
+      ancestorIds: ancestorIdsOf(page),
     });
   }
 
@@ -178,12 +178,18 @@ export class ConfluenceConnector implements Connector {
     let aclPrincipals: string[];
     let aclStatus: SourceDocument['aclStatus'] = 'resolved';
     try {
+      // Only pages have the restriction model this resolver implements; any
+      // other content type (attachment, blogpost, …) that slips through the
+      // CQL must quarantine, not inherit page semantics.
+      if (page.type && page.type !== 'page') {
+        throw new AclResolutionError(
+          `content ${page.id} has type "${page.type}" — no object-level ACL resolver for it yet`,
+        );
+      }
       aclPrincipals = await this.aclResolver.resolve({
         spaceKey: page.space?.key,
         restrictions: page.restrictions,
-        ancestorIds: (page.ancestors ?? [])
-          .map((a) => String(a.id))
-          .filter((id) => id !== 'undefined'),
+        ancestorIds: ancestorIdsOf(page),
       });
     } catch (err) {
       if (!(err instanceof AclResolutionError)) throw err;
@@ -213,12 +219,31 @@ function toCql(iso: string): string {
   return new Date(iso).toISOString().slice(0, 16).replace('T', ' ');
 }
 
+/**
+ * Ancestor ids for the inheritance walk. An ancestor entry WITHOUT a usable id
+ * is an unresolvable permission layer: silently dropping it would skip a
+ * potentially restricted parent and over-grant (fail-open) — so it throws
+ * AclResolutionError and the document quarantines instead (P1.1).
+ */
+function ancestorIdsOf(page: ConfluencePage): string[] {
+  return (page.ancestors ?? []).map((a) => {
+    const id = a.id === undefined || a.id === null ? '' : String(a.id);
+    if (!id || id === 'undefined' || id === 'null') {
+      throw new AclResolutionError(
+        `page ${page.id}: ancestor entry without a usable id — inheritance cannot be resolved`,
+      );
+    }
+    return id;
+  });
+}
+
 // ── Confluence REST response shapes (only the fields we use) ─────────────────
 interface ConfluenceSearchResult {
   results?: ConfluencePage[];
 }
 interface ConfluencePage {
   id: string | number;
+  type?: string;
   title?: string;
   body?: { storage?: { value?: string } };
   version?: { when?: string; number?: number };

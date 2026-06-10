@@ -111,7 +111,10 @@ describe('ConfluenceAclResolver', () => {
   // P1.1 names attachment-vs-page ACL divergence as a Phase-2 exit gate. The
   // object-level attachment resolver is an explicit, signed-off scope
   // exclusion for this slice (attachments are not ingested at all yet — no
-  // attachment content can leak). The pending test keeps the requirement
-  // visible until attachments ship.
+  // attachment content can leak). Two TRIPWIRES enforce the exclusion until
+  // then: the connector spec pins the crawl CQL to type=page, and toDocument
+  // quarantines any non-page content type outright — so shipping attachment
+  // ingestion without an object-level resolver turns tests red instead of
+  // silently inheriting page ACLs.
   it.todo('attachment ACLs resolve at the OBJECT level, never inherited from the parent page');
 });

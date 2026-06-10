@@ -108,4 +108,59 @@ describe('OidcTokenVerifier', () => {
     });
     await expect(verifier.verify(token)).resolves.toMatchObject({ hasOverage: true });
   });
+
+  it('rejects a token WITHOUT an exp claim (a signed token must never be valid forever)', async () => {
+    const token = await idp.signToken({ oid: 'u-1', expiresIn: 'none' });
+    await expect(verifier.verify(token)).rejects.toThrow(IdentityError);
+  });
+});
+
+describe('OidcTokenVerifier (oidc mode — remote JWKS trust root)', () => {
+  // The one branch production runs that local-oidc does not: createRemoteJWKSet.
+  // Served hermetically from an in-process HTTP server — no network.
+  let idp: LocalIdp;
+  let rogue: LocalIdp;
+  let server: import('http').Server;
+  let verifier: OidcTokenVerifier;
+
+  beforeAll(async () => {
+    idp = await createLocalIdp();
+    rogue = await createLocalIdp();
+
+    const http = await import('http');
+    server = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(idp.jwks));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    verifier = new OidcTokenVerifier({
+      mode: 'oidc',
+      issuer: idp.issuer,
+      audience: idp.audience,
+      jwksUrl: `http://127.0.0.1:${port}/keys`,
+      jwksFile: '',
+      clockToleranceS: 5,
+      groupsClaim: 'groups',
+    });
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('verifies a valid token against the remotely served JWKS', async () => {
+    const token = await idp.signToken({ oid: 'remote-u', groups: ['g-r'] });
+    await expect(verifier.verify(token)).resolves.toEqual({
+      oid: 'remote-u',
+      groups: ['g-r'],
+      hasOverage: false,
+    });
+  });
+
+  it('rejects a token signed by a key the remote JWKS does not contain', async () => {
+    const token = await rogue.signToken({ oid: 'remote-u' });
+    await expect(verifier.verify(token)).rejects.toThrow(IdentityError);
+  });
 });

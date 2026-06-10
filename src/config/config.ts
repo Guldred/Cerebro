@@ -101,7 +101,7 @@ export interface CerebroConfig {
 }
 
 export function loadConfig(): CerebroConfig {
-  const env = (str('CEREBRO_ENV', process.env.NODE_ENV === 'production' ? 'production' : 'development')) as CerebroConfig['env'];
+  const env = resolveEnv();
   const issuer = str('AUTH_OIDC_ISSUER', '');
 
   const config: CerebroConfig = {
@@ -188,6 +188,28 @@ export function loadConfig(): CerebroConfig {
 }
 
 /**
+ * Deployment environment, STRICTLY validated. CEREBRO_ENV is this app's knob:
+ * any value outside the known set refuses to boot — a typo ('Producton',
+ * 'staging') must never silently run with development-grade auth. Common
+ * aliases normalize toward the SAFE direction (prod → production). NODE_ENV
+ * stays a fallback with its Node-conventional semantics (only the exact string
+ * 'production' activates production).
+ */
+function resolveEnv(): CerebroConfig['env'] {
+  const raw = process.env.CEREBRO_ENV ?? '';
+  if (raw) {
+    const norm = raw.trim().toLowerCase();
+    if (norm === 'production' || norm === 'prod') return 'production';
+    if (norm === 'development' || norm === 'dev') return 'development';
+    throw new Error(
+      `Refusing to boot: CEREBRO_ENV must be development or production, got "${raw}" ` +
+        '(an unrecognized value must never silently disable the production boot guards)',
+    );
+  }
+  return process.env.NODE_ENV === 'production' ? 'production' : 'development';
+}
+
+/**
  * Fail-closed boot assertions (Plan_Review P1.1/P1.2): insecure combinations
  * must be UNBOOTABLE, not warned about. Throws before the app serves a byte.
  */
@@ -211,6 +233,14 @@ function assertBootInvariants(c: CerebroConfig): void {
     }
     if (c.auth.jwksFile) {
       fail('AUTH_OIDC_JWKS_FILE (a local JWT trust root) must not be set in production');
+    }
+    // A plaintext-HTTP trust root lets an on-path attacker substitute the JWKS
+    // and forge every identity in the system.
+    if (!c.auth.issuer.startsWith('https://')) {
+      fail(`AUTH_OIDC_ISSUER must be https:// in production (got "${c.auth.issuer}")`);
+    }
+    if (!c.auth.jwksUrl.startsWith('https://')) {
+      fail(`AUTH_OIDC_JWKS_URL must be https:// in production (got "${c.auth.jwksUrl}")`);
     }
   }
 

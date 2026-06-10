@@ -18,8 +18,9 @@ export interface LocalIdp {
     claimNames?: Record<string, unknown>;
     /** Override iss/aud or add/remove arbitrary claims for negative tests. */
     overrides?: Record<string, unknown>;
-    /** Timespan string ('10m') or absolute epoch seconds (for expired tokens). */
-    expiresIn?: string | number;
+    /** Timespan string ('10m'), absolute epoch seconds (for expired tokens),
+     *  or 'none' to OMIT exp entirely (negative test for requiredClaims). */
+    expiresIn?: string | number | 'none';
   }): Promise<string>;
 }
 
@@ -44,13 +45,13 @@ export async function createLocalIdp(
       if (claimNames !== undefined) payload._claim_names = claimNames;
       Object.assign(payload, overrides);
 
-      return new SignJWT(payload)
+      const builder = new SignJWT(payload)
         .setProtectedHeader({ alg: 'RS256', kid: 'local-test-key' })
         .setIssuer((overrides?.iss as string) ?? issuer)
         .setAudience((overrides?.aud as string) ?? audience)
-        .setIssuedAt()
-        .setExpirationTime(expiresIn)
-        .sign(privateKey);
+        .setIssuedAt();
+      if (expiresIn !== 'none') builder.setExpirationTime(expiresIn);
+      return builder.sign(privateKey);
     },
   };
 }

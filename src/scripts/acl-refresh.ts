@@ -27,11 +27,15 @@ async function main(): Promise<void> {
     const ingestion = app.get(IngestionService, { strict: false });
     const db = app.get(DatabaseService, { strict: false });
 
-    const stats = await ingestion.refreshAcls(buildConnector());
+    const connector = buildConnector();
+    const stats = await ingestion.refreshAcls(connector);
     console.log('ACL refresh:', stats);
 
+    // Gate on THIS connector's documents only — quarantined docs of another
+    // source must not fail (or be hidden by) an unrelated connector's run.
     const dark = await db.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM documents WHERE acl_status = 'failed'`,
+      `SELECT count(*)::text AS count FROM documents WHERE acl_status = 'failed' AND source_system = $1`,
+      [connector.sourceSystem],
     );
     const darkCount = Number(dark.rows[0]?.count ?? 0);
     if (darkCount > 0) {

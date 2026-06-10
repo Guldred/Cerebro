@@ -82,7 +82,7 @@ export class IngestionService {
       const aclChanged =
         JSON.stringify([...prior.acl_principals].sort()) !== JSON.stringify(acl) ||
         prior.acl_status !== aclStatus;
-      if (!aclChanged) return { skipped: true, chunks: 0 };
+      if (!aclChanged) return { skipped: true, chunks: 0, quarantined };
       // ACL-only rewrite: content and vectors untouched.
       await this.writeAcl(id, acl, aclStatus);
       return { skipped: false, chunks: 0, aclOnly: true, quarantined };
@@ -90,6 +90,24 @@ export class IngestionService {
 
     const chunks = chunkMarkdown(body);
     if (chunks.length === 0) {
+      // LEAK GUARD: when a STORED document's body empties out, returning early
+      // would leave the previous version's chunks live under their OLD — and
+      // possibly broader — ACL (e.g. page emptied in the same window its
+      // restriction tightened, or its resolution failed). Remove the stale
+      // chunks and persist the new ACL/status before yielding.
+      if (prior) {
+        await this.db.transaction(async (client) => {
+          await client.query('DELETE FROM chunks WHERE document_id = $1', [id]);
+          await client.query(
+            `UPDATE documents
+                SET acl_principals = $2, acl_status = $3, content_hash = $4, indexed_at = now()
+              WHERE id = $1`,
+            [id, acl, aclStatus, hash],
+          );
+        });
+        this.log.warn(`Document ${id} now produces no chunks — stale chunks removed, ACL updated`);
+        return { skipped: false, chunks: 0, aclOnly: true, quarantined };
+      }
       this.log.warn(`Document ${id} produced no chunks (empty body) — skipping`);
       return { skipped: true, chunks: 0 };
     }

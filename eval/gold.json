@@ -1,5 +1,5 @@
 {
-  "description": "Cerebro evaluation gold standard. Labels relevant DOCUMENTS (not just QA pairs) per question, plus permission (ACL) and cross-lingual cases. Built early (plan §13 / critique P1) so retrieval/chunking/model changes are gated, not guessed. Cross-lingual cases require a real multilingual embedding model and are reported separately under the fake provider. Phase-2 exit gates: salary-allowed-acl exercises the principal-mapping expansion (entra-group:hr -> confluence-group:hr-payroll); salary-mapped-acl-deny pins that an UNMAPPED Entra group gets nothing; unresolved-principal pins that a chunk ACL with no mapping row (confluence-group:board-secret) is invisible to every caller.",
+  "description": "Cerebro evaluation gold standard. Labels relevant DOCUMENTS (not just QA pairs) per question, plus permission (ACL) and cross-lingual cases. Built early (plan §13 / critique P1) so retrieval/chunking/model changes are gated, not guessed. Cross-lingual cases require a real multilingual embedding model and are reported separately under the fake provider. Phase-2 exit gates: salary-allowed-acl exercises the principal-mapping expansion (entra-group:hr -> confluence-group:hr-payroll); salary-mapped-acl-deny pins that an UNMAPPED Entra group gets nothing; unresolved-principal pins that a chunk ACL with no mapping row (confluence-group:board-secret) is invisible to every caller. quarantined-invisible pins the quarantine path across the real SQL boundary (acl_status: failed -> zero principals -> invisible even to the mapped group). handbook-all-users pins the reserved all-users principal in both identity legs (explicit in dev-header, implicit for authenticated oidc callers). 'required' cases fail the run individually so aggregate recall slack cannot absorb a security-gate regression.",
   "topK": 8,
   "recallThreshold": 0.75,
   "cases": [
@@ -63,7 +63,8 @@
       ],
       "relevantDocIds": [
         "confluence:HR-SALARY-BANDS"
-      ]
+      ],
+      "required": true
     },
     {
       "id": "residency-crosslingual",
@@ -99,6 +100,29 @@
         "confluence:BOARD-MINUTES-Q2"
       ],
       "expectNotFound": true
+    },
+    {
+      "id": "quarantined-invisible",
+      "question": "What was the root cause of the April 2026 security incident?",
+      "principals": [
+        "entra-group:security"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:SEC-INCIDENT-2026"
+      ],
+      "expectNotFound": true
+    },
+    {
+      "id": "handbook-all-users",
+      "question": "How many vacation days do full-time employees get?",
+      "principals": [
+        "all-users"
+      ],
+      "relevantDocIds": [
+        "confluence:EMP-HANDBOOK"
+      ],
+      "required": true
     }
   ]
 }

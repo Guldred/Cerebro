@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
+import { DatabaseService } from '../db/database.service';
 import { IdentityService } from '../auth/identity.service';
 import { CallerIdentity } from '../auth/identity.types';
 import { createLocalIdp, LocalIdp } from '../auth/testing/token-factory';
@@ -36,6 +37,9 @@ interface GoldCase {
   forbiddenDocIds?: string[];
   expectNotFound?: boolean;
   crossLingual?: boolean;
+  /** A required case that misses fails the eval outright — aggregate recall
+   *  slack must not let a security-gate case regress silently. */
+  required?: boolean;
 }
 interface Gold {
   topK: number;
@@ -66,10 +70,13 @@ async function mintCaseToken(idp: LocalIdp, c: GoldCase): Promise<string> {
   for (const p of c.principals) {
     if (p.startsWith(ENTRA_GROUP)) groups.push(p.slice(ENTRA_GROUP.length));
     else if (p.startsWith(ENTRA_USER)) oid = p.slice(ENTRA_USER.length);
-    else if (p !== 'public') {
+    else if (p !== 'public' && p !== 'all-users') {
+      // 'public' is appended to every caller by retrieval; 'all-users' is
+      // minted automatically for every AUTHENTICATED oidc identity — both are
+      // implicit in this leg (dev-header passes them verbatim instead).
       throw new Error(
         `Gold case ${c.id}: principal "${p}" cannot be represented in an Entra token — ` +
-          `use entra-group:/entra-user: (or 'public', which every caller holds automatically)`,
+          `use entra-group:/entra-user: (or the implicit public/all-users)`,
       );
     }
   }
@@ -88,6 +95,7 @@ async function main(): Promise<void> {
   const retrieval = app.get(RetrievalService, { strict: false });
   const rag = app.get(RagService, { strict: false });
   const identityService = app.get(IdentityService, { strict: false });
+  const db = app.get(DatabaseService, { strict: false });
 
   const identityFor = async (c: GoldCase): Promise<CallerIdentity> =>
     idp
@@ -99,9 +107,58 @@ async function main(): Promise<void> {
   let reciprocalRankSum = 0;
   let aclViolations = 0;
   let notFoundFailures = 0;
+  let requiredMisses = 0;
   const rows: string[] = [];
 
   try {
+    // PRESENCE CONTROL: every document a case references must exist in the
+    // corpus. Without this, a forbidden-doc case passes VACUOUSLY when the
+    // protected document was never ingested (deleted seed file, connector
+    // regression) — the primary leak gate must not be satisfiable by absence.
+    const referenced = [
+      ...new Set(gold.cases.flatMap((c) => [...c.relevantDocIds, ...(c.forbiddenDocIds ?? [])])),
+    ];
+    const present = await db.query<{ id: string }>(
+      'SELECT id FROM documents WHERE id = ANY($1)',
+      [referenced],
+    );
+    const missing = referenced.filter((id) => !present.rows.some((r) => r.id === id));
+    if (missing.length > 0) {
+      throw new Error(
+        `Eval corpus integrity failure: gold set references documents not in the store: ` +
+          `${missing.join(', ')} — leak cases would pass vacuously. Re-seed or fix the gold set.`,
+      );
+    }
+
+    // SCHEMA TRIPWIRE: the CHECKs that make dangerous mapping rows
+    // unrepresentable are load-bearing for fail-closed; prove they still
+    // reject. Each insert runs in a rolled-back transaction.
+    const badMappingRows: [string, string][] = [
+      ['entra-group:x', 'public'], //          reserved source principal
+      ['entra-group:x', 'all-users'], //       reserved source principal
+      ['entra-group:x', 'nonamespace'], //     un-namespaced source principal
+      ['hr', 'confluence-group:x'], //         un-namespaced entra principal
+    ];
+    for (const [entra, source] of badMappingRows) {
+      let rejected = false;
+      try {
+        await db.transaction(async (client) => {
+          await client.query(
+            'INSERT INTO principal_mappings (source_principal, entra_principal) VALUES ($1, $2)',
+            [source, entra],
+          );
+          throw new Error('__ROLLBACK__'); // insert succeeded — roll it back
+        });
+      } catch (err) {
+        rejected = !String(err).includes('__ROLLBACK__');
+      }
+      if (!rejected) {
+        throw new Error(
+          `Schema tripwire failure: principal_mappings accepted the dangerous row ` +
+            `(${entra} -> ${source}) — a CHECK constraint has regressed.`,
+        );
+      }
+    }
     for (const c of gold.cases) {
       const identity = await identityFor(c);
       const chunks = await retrieval.search(c.question, { identity, topK: gold.topK });
@@ -134,6 +191,9 @@ async function main(): Promise<void> {
           reciprocalRankSum += 1 / firstRelevantRank;
         }
       }
+      // Security-gate cases fail the run individually — aggregate recall
+      // slack (threshold < 1.0) must not absorb them.
+      if (c.required && c.relevantDocIds.length > 0 && !hit) requiredMisses++;
 
       const status = leaked.length
         ? `LEAK!(${leaked.join(',')})`
@@ -142,8 +202,8 @@ async function main(): Promise<void> {
           : c.relevantDocIds.length === 0
             ? 'ok(deny)'
             : hit
-              ? `hit@${firstRelevantRank}`
-              : 'MISS';
+              ? `hit@${firstRelevantRank}${c.required ? ' [required]' : ''}`
+              : `MISS${c.required ? ' [REQUIRED!]' : ''}`;
       rows.push(
         `  ${c.id.padEnd(24)} ${c.crossLingual ? '[xling] ' : '        '}${status}`,
       );
@@ -163,8 +223,13 @@ async function main(): Promise<void> {
     );
     console.log(`  ACL violations = ${aclViolations}  (must be 0)`);
     console.log(`  Abstention (not-found) failures = ${notFoundFailures}  (must be 0)`);
+    console.log(`  Required-case misses = ${requiredMisses}  (must be 0)`);
 
-    const pass = aclViolations === 0 && notFoundFailures === 0 && recall >= gold.recallThreshold;
+    const pass =
+      aclViolations === 0 &&
+      notFoundFailures === 0 &&
+      requiredMisses === 0 &&
+      recall >= gold.recallThreshold;
     console.log(`\n  ${pass ? 'PASS' : 'FAIL'}\n`);
     if (!pass) process.exitCode = 1;
   } finally {

@@ -5,6 +5,11 @@
       "source_principal": "confluence-group:hr-payroll",
       "entra_principal": "entra-group:hr",
       "note": "demo: HR payroll team may read salary bands"
+    },
+    {
+      "source_principal": "confluence-group:security-team",
+      "entra_principal": "entra-group:security",
+      "note": "demo: mapping EXISTS, but seed/security-incident.md is quarantined (acl_status: failed) — even this mapped caller must see nothing until resolution succeeds"
     }
   ]
 }
