@@ -42,6 +42,11 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Full-project type check — the nest build excludes src/mcp and
+      # src/scripts (they run via ts-node), so check them explicitly.
+      - name: Type check (whole project)
+        run: npx tsc --noEmit
+
       - name: Unit tests
         run: npm test
 
@@ -52,5 +57,11 @@ jobs:
 
       # The integration gate: hybrid retrieval + RAG over a real pgvector store.
       # Fails the build on any ACL leak, abstention regression, or Recall@k drop.
-      - name: Eval (Recall@k + ACL-leak gate)
+      - name: Eval (Recall@k + ACL-leak gate, dev-header identity)
         run: npm run eval
+
+      # The same gold set gated through the REAL OIDC verifier: a throwaway
+      # RS256 trust root is generated and a JWT is minted + validated per case
+      # (signature/issuer/audience/exp run the production code path, offline).
+      - name: Eval (local-oidc identity — production verifier path)
+        run: EVAL_AUTH=local-oidc npm run eval

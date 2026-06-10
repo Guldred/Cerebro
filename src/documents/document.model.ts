@@ -14,6 +14,13 @@ export interface SourceDocument {
   lang?: string; // 'de' | 'en' | ...
   /** Principals (groups/users) allowed to see this in the source — the ACL (§7). */
   aclPrincipals: string[];
+  /**
+   * 'failed' = the connector could not resolve this document's permissions
+   * (source API error). Ingestion then QUARANTINES it: content is stored for
+   * recovery but acl_principals is zeroed — invisible to everyone, never
+   * stale-allow, never public (Plan_Review P1.1 fail-closed invariant).
+   */
+  aclStatus?: 'resolved' | 'failed';
   /** Normalized body as Markdown (loaders convert HTML/code/Office into this). */
   body: string;
   sourceCreatedAt?: string; // ISO 8601

@@ -1,7 +1,10 @@
+import { CallerIdentity } from '../auth/identity.types';
+
 export interface RetrievalOptions {
-  /** Caller's resolved principals (Entra ID groups + user id). The public
-   *  principal is always added by the service so public content stays visible. */
-  principals: string[];
+  /** WHO is asking — minted exclusively by IdentityService (P1.2). Principal
+   *  mapping expansion and the public-principal append happen INSIDE the
+   *  retrieval service, so no caller can fabricate or forget them. */
+  identity: CallerIdentity;
   /** Final number of chunks returned after fusion. Defaults to config topK. */
   topK?: number;
   /** Candidates pulled per leg (vector + FTS) before fusion. Defaults to config. */

@@ -16,6 +16,8 @@
     "db:migrate": "ts-node -r tsconfig-paths/register src/scripts/migrate.ts",
     "db:seed": "ts-node -r tsconfig-paths/register src/scripts/seed.ts",
     "eval": "ts-node -r tsconfig-paths/register src/scripts/eval.ts",
+    "acl:refresh": "ts-node -r tsconfig-paths/register src/scripts/acl-refresh.ts",
+    "auth:dev-jwks": "ts-node -r tsconfig-paths/register src/scripts/dev-jwks.ts",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest"
@@ -29,6 +31,7 @@
     "class-validator": "^0.14.1",
     "dotenv": "^16.4.5",
     "gray-matter": "^4.0.3",
+    "jose": "^5.10.0",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",

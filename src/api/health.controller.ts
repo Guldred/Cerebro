@@ -1,9 +1,12 @@
 import { Controller, Get, Inject } from '@nestjs/common';
+import { Public } from '../auth/auth.guard';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { DatabaseService } from '../db/database.service';
 import { EMBEDDING_PROVIDER, EmbeddingProvider } from '../embedding/embedding.interface';
 import { LLM_PROVIDER, LlmProvider } from '../llm/llm.interface';
 
+/** Liveness/readiness — the only identity-free endpoint (@Public). */
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(
@@ -31,6 +34,7 @@ export class HealthController {
       embedding: { provider: this.config.embedding.provider, model: this.embedder.model, dim: this.embedder.dim },
       llm: { provider: this.config.llm.provider, model: this.llm.model },
       aclEnforced: this.config.acl.enforced,
+      authMode: this.config.auth.mode,
     };
   }
 }

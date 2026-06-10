@@ -1,8 +1,9 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import { Body, Controller, Post } from '@nestjs/common';
+import { Identity } from '../auth/auth.guard';
+import { CallerIdentity } from '../auth/identity.types';
 import { RagService } from '../rag/rag.service';
 import { RetrievalService } from '../retrieval/retrieval.service';
 import { QueryDto, SearchDto } from './dto';
-import { PRINCIPALS_HEADER, resolvePrincipals } from './identity';
 
 @Controller()
 export class QueryController {
@@ -13,13 +14,9 @@ export class QueryController {
 
   /** Full RAG: question → grounded, cited answer (plan §6.6 POST /query). */
   @Post('query')
-  async query(
-    @Body() dto: QueryDto,
-    @Headers(PRINCIPALS_HEADER) principalsHeader?: string,
-  ) {
-    const principals = resolvePrincipals(principalsHeader);
+  async query(@Body() dto: QueryDto, @Identity() identity: CallerIdentity) {
     return this.rag.answer(dto.question, {
-      principals,
+      identity,
       topK: dto.topK,
       sourceSystems: dto.sourceSystems,
     });
@@ -27,13 +24,9 @@ export class QueryController {
 
   /** Raw retrieval without generation (plan §6.6 POST /search). */
   @Post('search')
-  async search(
-    @Body() dto: SearchDto,
-    @Headers(PRINCIPALS_HEADER) principalsHeader?: string,
-  ) {
-    const principals = resolvePrincipals(principalsHeader);
+  async search(@Body() dto: SearchDto, @Identity() identity: CallerIdentity) {
     const results = await this.retrieval.search(dto.query, {
-      principals,
+      identity,
       topK: dto.topK,
       sourceSystems: dto.sourceSystems,
     });

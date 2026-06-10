@@ -7,7 +7,7 @@ breadcrumb: HR > Compensation > Salary Bands
 author: Pat Morgan
 content_type: text/markdown
 lang: en
-acl_principals: [hr]
+acl_principals: ["confluence-group:hr-payroll"]
 created_at: 2026-01-20T09:00:00Z
 updated_at: 2026-02-10T10:00:00Z
 ---

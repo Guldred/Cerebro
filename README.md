@@ -25,9 +25,9 @@ The architecture for the full system is in place as interfaces; what's wired vs.
 |---|---|---|
 | Embeddings | deterministic local `fake` (1024-dim, no keys) | Azure OpenAI (EU), self-hosted `bge-m3` via OpenAI-compatible endpoint |
 | Generation | deterministic extractive `fake` (grounded, abstains) | Azure OpenAI, self-hosted EU LLM |
-| Connectors | `sample` (reads `seed/*.md`) + **Confluence Cloud** (REST/CQL, mock-tested) | GitLab, Teams; Confluence deny/inheritance + Entra principal mapping (Phase 2) |
+| Connectors | `sample` (reads `seed/*.md`) + **Confluence Cloud** (REST/CQL, deny/inheritance read-set) + **GitHub** | GitLab, Teams |
 | Retrieval | hybrid vector+FTS, RRF, HNSW iterative-scan, ACL pre-filter | cross-encoder reranking, BM25 lexical arm |
-| Permissions | per-chunk `acl_principals`, hard SQL filter, fail-closed | Entra ID OIDC, deny/inheritance resolution, principal mapping (Phase 2) |
+| Permissions | per-chunk `acl_principals`, hard SQL filter, fail-closed; **Entra-shaped OIDC** (`AUTH_MODE`), **principal mapping** (query-time, fail-closed), deny/inheritance resolution, ACL refresh w/o re-embed, MCP identity hard-reject | Graph resolver for >200-group tokens, attachment-level ACLs, late-binding re-check |
 | Interfaces | REST `/query` `/search` `/health`, MCP `cerebro_query`/`cerebro_search` | webhooks, BullMQ delta sync, reranker |
 | Quality | eval harness gating Recall@k + ACL leaks + abstention | RAGAS faithfulness, per-stage tracing |
 
@@ -48,8 +48,9 @@ npm run db:seed               # ingest the sample DE+EN corpus (seed/*.md)
 npm run start:dev             # API on http://localhost:3000
 ```
 
-Try it (the `x-cerebro-principals` header stands in for the caller's Entra groups — Phase 2
-replaces it with a validated OIDC token):
+Try it. In the default `AUTH_MODE=dev-header` the `x-cerebro-principals` header stands in for
+the caller's validated Entra principals (switch to real token validation below — the header is
+then ignored):
 
 ```bash
 curl -s localhost:3000/health | jq
@@ -64,15 +65,22 @@ curl -s -X POST localhost:3000/query -H 'content-type: application/json' \
   -H 'x-cerebro-principals: public' \
   -d '{"question":"Welche Frist gilt für das Recht auf Löschung?"}' | jq
 
-# PERMISSION-AWARE: the restricted "Salary Bands" doc...
+# PERMISSION-AWARE: the restricted "Salary Bands" doc carries the SOURCE-native
+# ACL confluence-group:hr-payroll; callers hold ENTRA principals. The
+# principal_mappings table (seeded from seed/principal-mappings.json) maps
+# entra-group:hr -> confluence-group:hr-payroll at query time.
 #   ...as a public caller → "Not found", no leak:
 curl -s -X POST localhost:3000/query -H 'content-type: application/json' \
   -H 'x-cerebro-principals: public' \
   -d '{"question":"What do the engineering salary bands cover?"}' | jq .answer
-#   ...as an hr caller → grounded answer + citation:
+#   ...as a caller in the Entra hr group → grounded answer + citation:
 curl -s -X POST localhost:3000/query -H 'content-type: application/json' \
-  -H 'x-cerebro-principals: hr' \
+  -H 'x-cerebro-principals: entra-group:hr' \
   -d '{"question":"What do the engineering salary bands cover?"}' | jq
+#   ...an UNMAPPED source principal is invisible to everyone (fail-closed):
+curl -s -X POST localhost:3000/query -H 'content-type: application/json' \
+  -H 'x-cerebro-principals: entra-group:board-secret' \
+  -d '{"question":"What budget did the board approve for Project Albatross?"}' | jq .answer
 
 # Raw retrieval (no generation)
 curl -s -X POST localhost:3000/search -H 'content-type: application/json' \
@@ -159,6 +167,59 @@ page inherits space access). Mapping those to Entra groups + full deny/inheritan
 
 ---
 
+## Identity & permissions (Phase 2)
+
+Identity is resolved by ONE service on every path (REST guard, MCP tool call, eval harness)
+and selected by `AUTH_MODE`:
+
+| Mode | Who is the caller | Use |
+|---|---|---|
+| `dev-header` (default) | `x-cerebro-principals` header, trusted verbatim | local DX, demo, CI leg 1 |
+| `local-oidc` | **validated JWT** (issuer/audience/signature/exp, RS256-pinned) against a **local JWKS file** | tests + CI leg 2 — the production verifier code path, offline |
+| `oidc` | validated JWT against the IdP's remote JWKS (Entra) | production |
+
+Boot is **fail-closed**: `CEREBRO_ENV=production` refuses to start with anything but
+`AUTH_MODE=oidc` + `ACL_ENFORCED=true`, and refuses a file-based trust root. Try the real
+token path locally:
+
+```bash
+DEV_TOKEN_GROUPS=hr npm run auth:dev-jwks   # writes .dev/jwks.json + prints env lines & a token
+AUTH_MODE=local-oidc AUTH_OIDC_ISSUER=... AUTH_OIDC_AUDIENCE=... \
+  AUTH_OIDC_JWKS_FILE=$PWD/.dev/jwks.json npm run start:dev
+curl -s -X POST localhost:3000/query -H "authorization: Bearer <token>" \
+  -H 'content-type: application/json' -d '{"question":"..."}' | jq   # header callers now get 401
+```
+
+**Principal mapping (query-time, fail-closed).** Chunks keep SOURCE-native principals
+(`confluence-group:*`, `confluence-user:*`, `confluence-space:*`, `github-repo:*`); the caller
+holds ENTRA principals (`entra-user:<oid>`, `entra-group:<gid>` from the validated token, plus
+the reserved `all-users`). At query time — inside the retrieval service, so no consumer can skip
+it — the `principal_mappings` table expands the caller's Entra principals into the source
+principals they hold. A source principal with **no mapping row is invisible to everyone**
+(an unresolved ACL can never default to public), and revoking access is one `DELETE` — no
+re-ingest. Schema `CHECK`s make public-granting or un-namespaced rows unrepresentable.
+`npm run db:seed` upserts the versioned fixture [seed/principal-mappings.json](seed/principal-mappings.json).
+
+**Confluence deny/inheritance.** The connector resolves each page's *effective read-set* at
+ingest: space base (symbolic `confluence-space:<KEY>`, or `public` only for spaces listed in
+`CONFLUENCE_PUBLIC_SPACES` — certified, never assumed), narrowed by the page's read restriction
+AND every restricted ancestor (a restricted ancestor restricts its whole subtree), with
+deny-over-allow in the IR for future SharePoint-style sources. A resolution failure
+**quarantines** the document: content stored, `acl_principals` zeroed, `acl_status='failed'` —
+invisible until re-resolution, never stale-allow.
+
+**ACL refresh without re-embedding.** The content hash excludes the ACL, so a permission change
+on an unchanged page rewrites `acl_principals` on documents + chunks and never touches vectors.
+`npm run acl:refresh` (cron it for sensitive sources) re-resolves every stored document of the
+configured connector and exits non-zero if quarantined documents remain — revocation gets its
+own cadence, decoupled from content sync.
+
+**MCP identity.** In oidc modes every MCP tool call re-reads and re-verifies the end-user's
+token from `MCP_USER_TOKEN_FILE` (must be `0600`); calls without a resolvable identity are
+hard-rejected — no service-credential fallback, no public-only degrade — and a client that
+still sends the legacy `principals` argument gets a loud error, not a silent ignore. Tokens
+never travel as tool arguments (prompt-injection exfiltration channel stays closed).
+
 ## Connecting a real source
 
 `npm run db:seed` ingests whatever `SEED_CONNECTOR` points at. Deletions are reconciled on each
@@ -230,11 +291,16 @@ eval/gold.json        labelled gold set (relevance + ACL + cross-lingual cases)
 
 ## Permissions & safety (read before exposing sensitive sources)
 
-The MVP demonstrates the **mechanism** (per-chunk ACL, hard SQL filter, fail-closed default, public
-caller cannot retrieve restricted docs). Before connecting sensitive sources, the **Phase-2**
-hardening in [docs/Plan_Review.md](docs/Plan_Review.md) is required — notably: resolving
-deny/inheritance into an effective read-set, cross-source principal mapping to Entra, per-user
-identity on the MCP path (no service-credential fallback), and the full GDPR erasure pipeline.
+Implemented: per-chunk ACL with a hard SQL filter; validated OIDC identity on REST **and** MCP
+(fail-closed boot, hard-reject without identity); query-time principal mapping where an
+unresolved source principal is invisible, never public; Confluence deny/inheritance resolved to
+an effective read-set with quarantine on failure; ACL refresh decoupled from content sync.
+
+Still open before sensitive go-live (see [docs/Plan_Review.md](docs/Plan_Review.md)): a
+Graph-backed group resolver for >200-group tokens (today such callers get a deterministic 403),
+attachment object-level ACLs (attachments are not ingested yet), late-binding membership
+re-checks for sensitive spaces, the full GDPR erasure pipeline, and the P2 list (least-privilege
+ingestion tokens, observability, prompt-injection hardening beyond the evidence envelope).
 
 > **Assumptions (reversible):** Confluence **Cloud**, **Entra ID** identity, default **`bge-m3`**
 > embeddings, single trust domain (no multi-tenancy). Change in `.env` / connector config.

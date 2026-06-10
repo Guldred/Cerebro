@@ -1,54 +1,47 @@
 import 'reflect-metadata';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
+import { DatabaseService } from '../db/database.service';
 import { IngestionService } from '../ingestion/ingestion.service';
-import { Connector } from '../ingestion/connectors/connector.interface';
-import { SampleConnector } from '../ingestion/connectors/sample/sample.connector';
-import { ConfluenceConnector } from '../ingestion/connectors/confluence/confluence.connector';
-import { GitHubConnector } from '../ingestion/connectors/github/github.connector';
+import { buildConnector } from './connector-factory';
 
 /**
  * Ingests a source through the real pipeline: normalize → chunk → embed → store.
  * Idempotent — re-running skips unchanged docs. Choose the source with
  * SEED_CONNECTOR=sample (default) | confluence | github.
  */
-function buildConnector(): Connector {
-  const which = process.env.SEED_CONNECTOR ?? 'sample';
-  switch (which) {
-    case 'confluence':
-      return new ConfluenceConnector({
-        baseUrl: required('CONFLUENCE_BASE_URL'),
-        email: required('CONFLUENCE_EMAIL'),
-        apiToken: required('CONFLUENCE_API_TOKEN'),
-        spaceKeys: list('CONFLUENCE_SPACE_KEYS'),
-      });
-    case 'github':
-      return new GitHubConnector({
-        token: process.env.GITHUB_TOKEN, // optional — public repos work without it
-        repos: list('GITHUB_REPOS') ?? [],
-        apiUrl: process.env.GITHUB_API_URL,
-      });
-    case 'sample':
-      return new SampleConnector(path.join(process.cwd(), 'seed'));
-    default:
-      throw new Error(`Unknown SEED_CONNECTOR: ${which}`);
+
+/**
+ * Upsert the versioned principal-mapping fixture (seed/principal-mappings.json)
+ * so demo, eval and CI share one reviewable source→Entra mapping set. The
+ * schema CHECKs reject malformed or public-granting rows at the DB layer.
+ */
+async function syncPrincipalMappings(db: DatabaseService): Promise<void> {
+  const file = path.join(process.cwd(), 'seed', 'principal-mappings.json');
+  const raw = await fs.readFile(file, 'utf8').catch(() => null);
+  if (raw === null) return;
+
+  const fixture = JSON.parse(raw) as {
+    mappings: { source_principal: string; entra_principal: string; note?: string }[];
+  };
+  for (const m of fixture.mappings) {
+    await db.query(
+      `INSERT INTO principal_mappings (source_principal, entra_principal, note, updated_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (source_principal, entra_principal)
+       DO UPDATE SET note = EXCLUDED.note, updated_at = now()`,
+      [m.source_principal, m.entra_principal, m.note ?? null],
+    );
   }
-}
-
-function list(key: string): string[] | undefined {
-  return process.env[key]?.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-function required(key: string): string {
-  const v = process.env[key];
-  if (!v) throw new Error(`SEED_CONNECTOR=confluence requires ${key}`);
-  return v;
+  console.log(`Principal mappings synced: ${fixture.mappings.length} row(s)`);
 }
 
 async function main(): Promise<void> {
   const app = await NestFactory.createApplicationContext(AppModule);
   try {
+    await syncPrincipalMappings(app.get(DatabaseService, { strict: false }));
     const ingestion = app.get(IngestionService, { strict: false });
     const stats = await ingestion.runInitialCrawl(buildConnector());
     console.log('Seed complete:', stats);

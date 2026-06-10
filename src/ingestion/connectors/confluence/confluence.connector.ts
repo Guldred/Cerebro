@@ -1,5 +1,10 @@
 import { SourceDocument } from '../../../documents/document.model';
 import { Connector, SyncResult } from '../connector.interface';
+import {
+  AclResolutionError,
+  ConfluenceAclResolver,
+  ConfluenceRestrictions,
+} from './confluence-acl.resolver';
 
 export interface ConfluenceConfig {
   /** e.g. https://your-domain.atlassian.net/wiki  (Confluence Cloud) */
@@ -12,6 +17,13 @@ export interface ConfluenceConfig {
   spaceKeys?: string[];
   /** Page size for REST pagination. */
   pageSize?: number;
+  /**
+   * Space keys an admin has CERTIFIED as world-readable (P1.1: "non-public
+   * unless explicitly certified public"). Unrestricted pages in any other
+   * space get the symbolic confluence-space:<KEY> principal, which reaches
+   * callers only through principal_mappings.
+   */
+  certifiedPublicSpaces?: string[];
 }
 
 /** Minimal fetch surface so tests can inject a mock. */
@@ -31,15 +43,22 @@ type FetchFn = (url: string, init?: { method?: string; headers?: Record<string, 
  * NOT reported by CQL `lastModified`, so they're reconciled by the full-crawl
  * sweep in IngestionService.runInitialCrawl (deltaSync returns no tombstones).
  *
- * SCOPE NOTE (critique P1): `resolvePermissions` extracts page-level read
- * restrictions into namespaced principals. Full deny/inheritance resolution and
- * mapping into the Entra namespace is Phase 2 — until then, principals are
- * source-native and a query-time principal-mapping layer must translate them.
+ * ACLs (Phase 2, Plan_Review P1.1): the effective read-set per page is resolved
+ * at ingest by ConfluenceAclResolver — space base + page restriction + every
+ * restricted ANCESTOR (inheritance), deny-over-allow via the shared IR. A
+ * resolution failure quarantines the document (aclStatus='failed', no
+ * principals) instead of defaulting to anything. Principals stay source-native
+ * (confluence-group:*, confluence-user:*, confluence-space:*) and reach callers
+ * only via the principal_mappings table at query time.
+ *
+ * The ancestor-restriction cache lives for this connector instance — construct
+ * a fresh connector per crawl/refresh run (the seed/refresh scripts do).
  */
 export class ConfluenceConnector implements Connector {
   readonly sourceSystem = 'confluence';
   private readonly auth: string;
   private readonly pageSize: number;
+  private readonly aclResolver: ConfluenceAclResolver;
 
   constructor(
     private readonly config: ConfluenceConfig,
@@ -50,12 +69,16 @@ export class ConfluenceConnector implements Connector {
     }
     this.auth = 'Basic ' + Buffer.from(`${config.email}:${config.apiToken}`).toString('base64');
     this.pageSize = config.pageSize ?? 50;
+    this.aclResolver = new ConfluenceAclResolver(
+      (contentId) => this.fetchRestrictions(contentId),
+      new Set(config.certifiedPublicSpaces ?? []),
+    );
   }
 
   async initialCrawl(): Promise<SourceDocument[]> {
     const docs: SourceDocument[] = [];
     for (const cql of this.spaceFilters('type=page and status=current')) {
-      for await (const page of this.searchPages(cql)) docs.push(this.toDocument(page));
+      for await (const page of this.searchPages(cql)) docs.push(await this.toDocument(page));
     }
     return docs;
   }
@@ -68,7 +91,7 @@ export class ConfluenceConnector implements Connector {
       : 'type=page and status=current';
     for (const cql of this.spaceFilters(base)) {
       for await (const page of this.searchPages(`${cql} order by lastModified asc`)) {
-        docs.push(this.toDocument(page));
+        docs.push(await this.toDocument(page));
         const when = page.version?.when;
         if (when && (!newest || when > newest)) newest = when;
       }
@@ -77,12 +100,25 @@ export class ConfluenceConnector implements Connector {
     return { documents: docs, deletedExternalIds: [], cursor: newest };
   }
 
+  /**
+   * Effective read-set for one page (ACL refresh / late binding). THROWS
+   * AclResolutionError on any failure — the caller quarantines, never defaults.
+   */
   async resolvePermissions(externalId: string): Promise<string[]> {
-    const page = (await this.get(
-      `/rest/api/content/${encodeURIComponent(externalId)}` +
-        `?expand=space,restrictions.read.restrictions.user,restrictions.read.restrictions.group`,
-    )) as ConfluencePage;
-    return this.principalsFor(page);
+    let page: ConfluencePage;
+    try {
+      page = (await this.get(
+        `/rest/api/content/${encodeURIComponent(externalId)}` +
+          `?expand=space,ancestors,restrictions.read.restrictions.user,restrictions.read.restrictions.group`,
+      )) as ConfluencePage;
+    } catch (err) {
+      throw new AclResolutionError(`Failed to fetch page ${externalId}`, err);
+    }
+    return this.aclResolver.resolve({
+      spaceKey: page.space?.key,
+      restrictions: page.restrictions,
+      ancestorIds: (page.ancestors ?? []).map((a) => String(a.id)).filter((id) => id !== 'undefined'),
+    });
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -110,6 +146,15 @@ export class ConfluenceConnector implements Connector {
     }
   }
 
+  /** One ancestor's read restrictions (for the resolver's inheritance walk). */
+  private async fetchRestrictions(contentId: string): Promise<ConfluenceRestrictions> {
+    const page = (await this.get(
+      `/rest/api/content/${encodeURIComponent(contentId)}` +
+        `?expand=restrictions.read.restrictions.user,restrictions.read.restrictions.group`,
+    )) as ConfluencePage;
+    return page.restrictions ?? {};
+  }
+
   private async get(path: string): Promise<unknown> {
     const url = `${this.config.baseUrl.replace(/\/$/, '')}${path}`;
     const res = await this.fetchFn(url, {
@@ -121,12 +166,31 @@ export class ConfluenceConnector implements Connector {
     return res.json();
   }
 
-  private toDocument(page: ConfluencePage): SourceDocument {
+  private async toDocument(page: ConfluencePage): Promise<SourceDocument> {
     const webui = page._links?.webui ?? `/pages/${page.id}`;
     const breadcrumbParts = [
       page.space?.name,
       ...(page.ancestors ?? []).map((a) => a.title),
     ].filter((s): s is string => Boolean(s));
+
+    // Fail-closed ACL resolution: an error quarantines THIS document (content
+    // kept, zero principals) and never aborts the rest of the crawl.
+    let aclPrincipals: string[];
+    let aclStatus: SourceDocument['aclStatus'] = 'resolved';
+    try {
+      aclPrincipals = await this.aclResolver.resolve({
+        spaceKey: page.space?.key,
+        restrictions: page.restrictions,
+        ancestorIds: (page.ancestors ?? [])
+          .map((a) => String(a.id))
+          .filter((id) => id !== 'undefined'),
+      });
+    } catch (err) {
+      if (!(err instanceof AclResolutionError)) throw err;
+      aclPrincipals = [];
+      aclStatus = 'failed';
+    }
+
     return {
       sourceSystem: this.sourceSystem,
       externalId: String(page.id),
@@ -135,26 +199,12 @@ export class ConfluenceConnector implements Connector {
       breadcrumb: breadcrumbParts.join(' > '),
       author: page.history?.createdBy?.displayName,
       contentType: 'text/html',
-      aclPrincipals: this.principalsFor(page),
+      aclPrincipals,
+      aclStatus,
       body: page.body?.storage?.value ?? '',
       sourceCreatedAt: page.history?.createdDate,
       sourceUpdatedAt: page.version?.when,
     };
-  }
-
-  /**
-   * Page-level read restrictions → namespaced principals. A page with NO explicit
-   * restriction inherits space access, represented as `confluence-space:<KEY>`
-   * (resolve to concrete Entra groups in Phase 2).
-   */
-  private principalsFor(page: ConfluencePage): string[] {
-    const read = page.restrictions?.read?.restrictions;
-    const groups = (read?.group?.results ?? []).map((g) => `confluence-group:${g.name}`);
-    const users = (read?.user?.results ?? []).map((u) => `confluence-user:${u.accountId}`);
-    const principals = [...groups, ...users];
-    if (principals.length > 0) return principals;
-    const spaceKey = page.space?.key;
-    return spaceKey ? [`confluence-space:${spaceKey}`] : [];
   }
 }
 
@@ -173,15 +223,8 @@ interface ConfluencePage {
   body?: { storage?: { value?: string } };
   version?: { when?: string; number?: number };
   space?: { key?: string; name?: string };
-  ancestors?: { title?: string }[];
+  ancestors?: { id?: string | number; title?: string }[];
   history?: { createdDate?: string; createdBy?: { displayName?: string } };
-  restrictions?: {
-    read?: {
-      restrictions?: {
-        user?: { results?: { accountId: string }[] };
-        group?: { results?: { name: string }[] };
-      };
-    };
-  };
+  restrictions?: ConfluenceRestrictions;
   _links?: { webui?: string };
 }

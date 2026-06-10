@@ -7,6 +7,7 @@ import {
   embedOne,
   toVectorLiteral,
 } from '../embedding/embedding.interface';
+import { PrincipalMappingService } from './principal-mapping.service';
 import { RetrievalOptions, RetrievedChunk } from './retrieval.types';
 
 interface ChunkRow {
@@ -38,12 +39,25 @@ export class RetrievalService {
     @Inject(CONFIG) private readonly config: CerebroConfig,
     private readonly db: DatabaseService,
     @Inject(EMBEDDING_PROVIDER) private readonly embedder: EmbeddingProvider,
+    private readonly mapping: PrincipalMappingService,
   ) {}
 
   async search(query: string, options: RetrievalOptions): Promise<RetrievedChunk[]> {
     const topK = options.topK ?? this.config.retrieval.topK;
     const candidates = options.candidates ?? this.config.retrieval.candidates;
     const { rrfK, ftsConfig } = this.config.retrieval;
+
+    // Defense in depth (P1.2): in oidc modes every authenticated caller holds
+    // at least entra-user:<oid>, so an empty set means some code path minted an
+    // identity without going through token validation — refuse loudly instead
+    // of silently degrading to public-only.
+    if (options.identity.mode !== 'dev-header' && options.identity.principals.length === 0) {
+      throw new Error('Invariant violation: authenticated identity with empty principal set');
+    }
+
+    // Principal-mapping expansion happens HERE, inside the enforcement point,
+    // so a caller can neither fabricate nor forget it (P1.1).
+    const callerPrincipals = await this.mapping.expand(options.identity);
 
     const queryVector = toVectorLiteral(await embedOne(this.embedder, query));
 
@@ -65,7 +79,7 @@ export class RetrievalService {
     if (this.config.acl.enforced) {
       // The defining permission-safety guarantee. Principals always include the
       // public principal (added below), so public content stays visible.
-      const principals = dedupe([...options.principals, this.config.acl.publicPrincipal]);
+      const principals = dedupe([...callerPrincipals, this.config.acl.publicPrincipal]);
       filters.push(`acl_principals && ${p(principals)}::text[]`);
     }
     if (options.sourceSystems && options.sourceSystems.length > 0) {

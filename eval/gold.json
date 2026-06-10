@@ -1,52 +1,104 @@
 {
-  "description": "Cerebro evaluation gold standard. Labels relevant DOCUMENTS (not just QA pairs) per question, plus permission (ACL) and cross-lingual cases. Built early (plan §13 / critique P1) so retrieval/chunking/model changes are gated, not guessed. Cross-lingual cases require a real multilingual embedding model and are reported separately under the fake provider.",
+  "description": "Cerebro evaluation gold standard. Labels relevant DOCUMENTS (not just QA pairs) per question, plus permission (ACL) and cross-lingual cases. Built early (plan §13 / critique P1) so retrieval/chunking/model changes are gated, not guessed. Cross-lingual cases require a real multilingual embedding model and are reported separately under the fake provider. Phase-2 exit gates: salary-allowed-acl exercises the principal-mapping expansion (entra-group:hr -> confluence-group:hr-payroll); salary-mapped-acl-deny pins that an UNMAPPED Entra group gets nothing; unresolved-principal pins that a chunk ACL with no mapping row (confluence-group:board-secret) is invisible to every caller.",
   "topK": 8,
   "recallThreshold": 0.75,
   "cases": [
     {
       "id": "db-setup-en",
       "question": "How do I set up the local Postgres database for development?",
-      "principals": ["public"],
-      "relevantDocIds": ["confluence:ENG-ONBOARDING"]
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [
+        "confluence:ENG-ONBOARDING"
+      ]
     },
     {
       "id": "vpn-de",
       "question": "Wie richte ich das Firmen-VPN auf meinem Laptop ein?",
-      "principals": ["public"],
-      "relevantDocIds": ["confluence:IT-VPN"]
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [
+        "confluence:IT-VPN"
+      ]
     },
     {
       "id": "rollback-en",
       "question": "What is the rollback procedure when a deployment fails?",
-      "principals": ["public"],
-      "relevantDocIds": ["gitlab:platform/runbooks/deployment"]
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [
+        "gitlab:platform/runbooks/deployment"
+      ]
     },
     {
       "id": "loeschung-de",
       "question": "Welche Frist gilt für das Recht auf Löschung personenbezogener Daten?",
-      "principals": ["public"],
-      "relevantDocIds": ["confluence:LEGAL-DSGVO"]
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [
+        "confluence:LEGAL-DSGVO"
+      ]
     },
     {
       "id": "salary-denied-acl",
       "question": "What are the engineering salary bands for 2026?",
-      "principals": ["public"],
+      "principals": [
+        "public"
+      ],
       "relevantDocIds": [],
-      "forbiddenDocIds": ["confluence:HR-SALARY-BANDS"],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
       "expectNotFound": true
     },
     {
       "id": "salary-allowed-acl",
       "question": "What are the engineering salary bands for 2026?",
-      "principals": ["hr"],
-      "relevantDocIds": ["confluence:HR-SALARY-BANDS"]
+      "principals": [
+        "entra-group:hr"
+      ],
+      "relevantDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ]
     },
     {
       "id": "residency-crosslingual",
       "question": "Where is personal data stored, and is it kept within the EU?",
-      "principals": ["public"],
-      "relevantDocIds": ["confluence:LEGAL-DSGVO"],
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [
+        "confluence:LEGAL-DSGVO"
+      ],
       "crossLingual": true
+    },
+    {
+      "id": "salary-mapped-acl-deny",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "entra-group:finance"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "expectNotFound": true
+    },
+    {
+      "id": "unresolved-principal",
+      "question": "What budget did the board approve for Project Albatross?",
+      "principals": [
+        "entra-group:board-secret"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:BOARD-MINUTES-Q2"
+      ],
+      "expectNotFound": true
     }
   ]
 }

@@ -33,6 +33,41 @@ function bool(key: string, fallback: boolean): boolean {
 export interface CerebroConfig {
   port: number;
   databaseUrl: string;
+  /** Deployment environment. Explicit (CEREBRO_ENV) so the production
+   *  fail-closed assertions never hinge on NODE_ENV being remembered. */
+  env: 'development' | 'production';
+
+  auth: {
+    /**
+     * dev-header  — trust the x-cerebro-principals header (MVP stub; local DX).
+     * local-oidc  — full OIDC validation against a LOCAL JWKS file (CI/tests run
+     *               the identical verifier code path with zero network).
+     * oidc        — full OIDC validation against the IdP's remote JWKS (production).
+     */
+    mode: 'dev-header' | 'local-oidc' | 'oidc';
+    issuer: string;
+    audience: string;
+    /** Remote JWKS (oidc mode). Defaults to <issuer>/discovery/v2.0/keys (Entra). */
+    jwksUrl: string;
+    /** Local JWKS file (local-oidc mode ONLY — production boot refuses it). */
+    jwksFile: string;
+    clockToleranceS: number;
+    groupsClaim: string;
+  };
+
+  mcp: {
+    /** oidc modes: end-user bearer-token file, re-read + re-verified per tool
+     *  call. Must not be group/world-readable. */
+    userTokenFile: string;
+    /** dev-header mode ONLY: launcher-set principals for local MCP demos. */
+    devPrincipals: string[];
+  };
+
+  mapping: {
+    /** principal_mappings cache TTL. 0 (default) = no cache: a revoked mapping
+     *  row takes effect on the very next query. Raise only deliberately. */
+    cacheTtlMs: number;
+  };
 
   embedding: {
     provider: 'fake' | 'azure-openai' | 'openai-compatible';
@@ -66,9 +101,41 @@ export interface CerebroConfig {
 }
 
 export function loadConfig(): CerebroConfig {
-  return {
+  const env = (str('CEREBRO_ENV', process.env.NODE_ENV === 'production' ? 'production' : 'development')) as CerebroConfig['env'];
+  const issuer = str('AUTH_OIDC_ISSUER', '');
+
+  const config: CerebroConfig = {
     port: int('PORT', 3000),
     databaseUrl: str('DATABASE_URL', 'postgres://cerebro:cerebro@localhost:5433/cerebro'),
+    env,
+
+    auth: {
+      mode: str('AUTH_MODE', 'dev-header') as CerebroConfig['auth']['mode'],
+      issuer,
+      audience: str('AUTH_OIDC_AUDIENCE', ''),
+      // Entra's jwks_uri lives at <tenant-base>/discovery/v2.0/keys where the
+      // issuer is <tenant-base>/v2.0 — strip that suffix before deriving. Other
+      // IdPs should set AUTH_OIDC_JWKS_URL explicitly.
+      jwksUrl: str(
+        'AUTH_OIDC_JWKS_URL',
+        issuer ? `${issuer.replace(/\/$/, '').replace(/\/v2\.0$/, '')}/discovery/v2.0/keys` : '',
+      ),
+      jwksFile: str('AUTH_OIDC_JWKS_FILE', ''),
+      clockToleranceS: int('AUTH_CLOCK_TOLERANCE_S', 60),
+      groupsClaim: str('AUTH_GROUPS_CLAIM', 'groups'),
+    },
+
+    mcp: {
+      userTokenFile: str('MCP_USER_TOKEN_FILE', ''),
+      devPrincipals: str('CEREBRO_MCP_PRINCIPALS', '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    },
+
+    mapping: {
+      cacheTtlMs: int('PRINCIPAL_MAPPING_CACHE_TTL_MS', 0),
+    },
 
     embedding: {
       provider: str('EMBEDDING_PROVIDER', 'fake') as CerebroConfig['embedding']['provider'],
@@ -115,6 +182,52 @@ export function loadConfig(): CerebroConfig {
       publicPrincipal: str('PUBLIC_PRINCIPAL', 'public'),
     },
   };
+
+  assertBootInvariants(config);
+  return config;
+}
+
+/**
+ * Fail-closed boot assertions (Plan_Review P1.1/P1.2): insecure combinations
+ * must be UNBOOTABLE, not warned about. Throws before the app serves a byte.
+ */
+function assertBootInvariants(c: CerebroConfig): void {
+  const fail = (msg: string): never => {
+    throw new Error(`Refusing to boot: ${msg}`);
+  };
+
+  if (!['dev-header', 'local-oidc', 'oidc'].includes(c.auth.mode)) {
+    fail(`AUTH_MODE must be dev-header | local-oidc | oidc, got "${c.auth.mode}"`);
+  }
+
+  if (c.env === 'production') {
+    // The header stub trusts the client outright and a local JWKS file lets an
+    // env var swap the JWT trust root — neither may ever serve real traffic.
+    if (c.auth.mode !== 'oidc') {
+      fail(`CEREBRO_ENV=production requires AUTH_MODE=oidc (got "${c.auth.mode}")`);
+    }
+    if (!c.acl.enforced) {
+      fail('CEREBRO_ENV=production requires ACL_ENFORCED=true');
+    }
+    if (c.auth.jwksFile) {
+      fail('AUTH_OIDC_JWKS_FILE (a local JWT trust root) must not be set in production');
+    }
+  }
+
+  if (c.auth.mode === 'oidc') {
+    if (!c.auth.issuer || !c.auth.audience || !c.auth.jwksUrl) {
+      fail('AUTH_MODE=oidc requires AUTH_OIDC_ISSUER, AUTH_OIDC_AUDIENCE and AUTH_OIDC_JWKS_URL');
+    }
+    if (c.auth.jwksFile) {
+      fail('AUTH_MODE=oidc never reads a JWKS file — use AUTH_MODE=local-oidc for file-based JWKS');
+    }
+  }
+
+  if (c.auth.mode === 'local-oidc') {
+    if (!c.auth.issuer || !c.auth.audience || !c.auth.jwksFile) {
+      fail('AUTH_MODE=local-oidc requires AUTH_OIDC_ISSUER, AUTH_OIDC_AUDIENCE and AUTH_OIDC_JWKS_FILE');
+    }
+  }
 }
 
 export const CONFIG = Symbol('CEREBRO_CONFIG');

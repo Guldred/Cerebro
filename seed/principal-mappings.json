@@ -1,0 +1,10 @@
+{
+  "description": "Demo/eval principal-mapping fixture (Plan_Review P1.1). Upserted into principal_mappings by `npm run db:seed`. Maps source-native principals stored on chunks to the Entra principals callers actually hold. A source principal with NO row here is invisible to everyone — that is the fail-closed default, demonstrated by confluence-group:board-secret which is deliberately unmapped.",
+  "mappings": [
+    {
+      "source_principal": "confluence-group:hr-payroll",
+      "entra_principal": "entra-group:hr",
+      "note": "demo: HR payroll team may read salary bands"
+    }
+  ]
+}

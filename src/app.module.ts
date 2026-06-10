@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from './auth/auth.module';
 import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './db/database.module';
 import { EmbeddingModule } from './embedding/embedding.module';
@@ -16,6 +17,7 @@ import { ApiModule } from './api/api.module';
 @Module({
   imports: [
     ConfigModule,
+    AuthModule,
     DatabaseModule,
     EmbeddingModule,
     LlmModule,
