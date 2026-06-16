@@ -5,6 +5,8 @@ import { ConfigModule } from '../config/config.module';
 import { AuthGuard } from './auth.guard';
 import { DELEGATION_VERIFIER, JoseDelegationVerifier } from './delegation/delegation-verifier';
 import { LocalAppendOnlyAnchor } from './delegation/local-anchor';
+import { MEMBERSHIP_CHECKER, UnverifiedMembershipChecker } from './delegation/membership';
+import { PolicyDecisionPoint } from './delegation/pdp';
 import { IdentityService } from './identity.service';
 
 /**
@@ -27,9 +29,12 @@ import { IdentityService } from './identity.service';
         new JoseDelegationVerifier(config.delegation, anchor),
       inject: [CONFIG, LocalAppendOnlyAnchor],
     },
+    // Phase-2 PDP + its membership oracle (inert unless DELEGATION_PDP_ENABLED).
+    { provide: MEMBERSHIP_CHECKER, useClass: UnverifiedMembershipChecker },
+    PolicyDecisionPoint,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [IdentityService, LocalAppendOnlyAnchor],
+  exports: [IdentityService, LocalAppendOnlyAnchor, PolicyDecisionPoint],
 })
 export class AuthModule implements OnApplicationBootstrap {
   private readonly log = new Logger(AuthModule.name);
