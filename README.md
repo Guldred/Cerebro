@@ -277,6 +277,30 @@ are gated end-to-end (zero keys, chain off) by the eval delegation leg:
 EVAL_AUTH=delegation npm run eval
 ```
 
+### Phase 2 — continuous runtime re-authorization at the MCP tool boundary (`DELEGATION_PDP_ENABLED`)
+
+Independently flaggable. When on, every MCP tool call runs a **Policy Decision Point** at the
+single choke point — *before* retrieval, with the tool name + args in hand — that re-authorizes
+the delegated call and returns **allow / deny / needs-approval**:
+
+- **deny** (action out of scope, or delegation revoked) → `isError` `DELEGATION_DENIED`, no retrieval.
+- **needs-approval** → a structured **AuthZEN AARP** step-up payload (not an error): the agent host
+  must satisfy a prerequisite (e.g. re-verify membership) and retry. This is the differentiator —
+  "policy can't authorize *yet*", modeled explicitly rather than as a flat deny.
+- **allow** → proceeds (the `RetrievalService` SQL pre-filter remains the ultimate backstop).
+
+The PDP calls the **same** policy core as `RetrievalService` (no second path); PDP-off changes
+nothing. For sources in `DELEGATION_SENSITIVE_SOURCES` it runs a **late-binding membership
+re-check** via a pluggable `MembershipChecker`.
+
+> **Honest scope.** Cerebro's `principal_mappings` is already read live per query
+> (`PRINCIPAL_MAPPING_CACHE_TTL_MS=0`), so caller membership is *already* call-time fresh — the
+> only stale layer is a chunk's source ACL, which only a **connector-backed** (key-gated) checker
+> can re-resolve at call time. The shipped default `UnverifiedMembershipChecker` therefore returns
+> `unknown` → **needs-approval** for sensitive sources rather than pretending to confirm. So
+> Phase 2's net-new value is the **boundary PDP + AARP step-up**, not membership freshness; the
+> connector-backed checker that truly closes the chunk-ACL window is a later, key-gated drop-in.
+
 ## Connecting a real source
 
 `npm run db:seed` ingests whatever `SEED_CONNECTOR` points at. Deletions are reconciled on each

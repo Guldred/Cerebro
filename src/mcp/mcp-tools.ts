@@ -2,6 +2,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z, ZodRawShape } from 'zod';
+import { PolicyDecisionPoint } from '../auth/delegation/pdp';
 import { CallerIdentity, IdentityError } from '../auth/identity.types';
 import { CerebroConfig } from '../config/config';
 import { RagService } from '../rag/rag.service';
@@ -13,6 +14,7 @@ export interface CerebroMcpDeps {
   rag: RagService;
   retrieval: RetrievalService;
   identity: McpIdentityProvider;
+  pdp: PolicyDecisionPoint;
 }
 
 /**
@@ -95,6 +97,47 @@ export function createCerebroMcpServer(deps: CerebroMcpDeps): McpServer {
     }
   };
 
+  /**
+   * Phase-2 PDP gate (docs/Totem_Integration.md §11). When DELEGATION_PDP_ENABLED
+   * and the caller is delegated, re-authorize the concrete tool call BEFORE
+   * retrieval: returns a short-circuit CallToolResult (deny → isError;
+   * needs-approval → a structured AARP step-up, NOT isError) or null to proceed.
+   * The args mirror RetrievalService's so the boundary and the backstop agree.
+   */
+  const pdpGate = async (
+    identity: CallerIdentity,
+    cmd: string,
+    args: CommonToolArgs,
+  ): Promise<CallToolResult | null> => {
+    if (!deps.config.delegation?.pdpEnabled || !identity.delegation) return null;
+    const decision = await deps.pdp.decide(identity, {
+      cmd,
+      args: {
+        topK: args.topK ?? deps.config.retrieval.topK,
+        ...(args.sourceSystems && args.sourceSystems.length > 0
+          ? { sourceSystems: args.sourceSystems }
+          : {}),
+      },
+      sourceSystems: args.sourceSystems,
+    });
+    if (decision.decision === 'allow') return null;
+    if (decision.decision === 'needs-approval') {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              { status: 'needs-approval', prerequisites: decision.prerequisites, reasons: decision.reasons },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+    return errorResult('DELEGATION_DENIED', decision.reasons.join(', '));
+  };
+
   registerTool(
     'cerebro_query',
     `Answer a natural-language question from the enterprise knowledge layer. Returns a grounded answer with source citations (deep links). ${identityNote}`,
@@ -107,6 +150,8 @@ export function createCerebroMcpServer(deps: CerebroMcpDeps): McpServer {
     async (args: { question: string } & CommonToolArgs): Promise<CallToolResult> => {
       const resolved = await resolveOrReject(args.principals);
       if ('error' in resolved) return resolved.error;
+      const gate = await pdpGate(resolved.identity, '/cerebro/query', args);
+      if (gate) return gate;
       try {
         const result = await deps.rag.answer(args.question, {
           identity: resolved.identity,
@@ -134,6 +179,8 @@ export function createCerebroMcpServer(deps: CerebroMcpDeps): McpServer {
     async (args: { query: string } & CommonToolArgs): Promise<CallToolResult> => {
       const resolved = await resolveOrReject(args.principals);
       if ('error' in resolved) return resolved.error;
+      const gate = await pdpGate(resolved.identity, '/cerebro/search', args);
+      if (gate) return gate;
       try {
         const results = await deps.retrieval.search(args.query, {
           identity: resolved.identity,

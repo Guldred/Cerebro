@@ -7,7 +7,13 @@
 > the RFC 9728 endpoint, config + boot guards, and the eval delegation leg are all in. All three eval legs
 > PASS against live pgvector (dev-header, local-oidc, **delegation** — the 5 hard acceptance cases:
 > happy / over-scope / under-entitled-human / revoked / expired), 0 ACL violations; unit suite green; tsc clean.
-> Phase 2 (per-MCP-call PDP, AARP `needs-approval`) remains, behind `DELEGATION_PDP_ENABLED`.
+>
+> **Phase 2 also IMPLEMENTED** (branch `feat/totem-delegation-phase2`, behind `DELEGATION_PDP_ENABLED`):
+> a `PolicyDecisionPoint` at the single MCP choke point returning allow / deny / **needs-approval** (AuthZEN
+> AARP step-up), reusing the ONE shared policy core (`decideDelegatedAction`) so there is no second
+> enforcement path; a pluggable `MembershipChecker` for `DELEGATION_SENSITIVE_SOURCES` (honest default =
+> `unknown` → needs-approval; connector-backed checker is the key-gated drop-in that truly closes the
+> chunk-ACL window). PDP-off is a no-op. Unit + MCP-integration tests green (198 total).
 >
 > This document is the Phase-0 deliverable required by [`docs/totem_cerebro_integration_prompt.md`](totem_cerebro_integration_prompt.md).
 > §12 records the decisions; all were taken on the recommended options.

@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import { IdentityService } from '../auth/identity.service';
+import { PolicyDecisionPoint } from '../auth/delegation/pdp';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { RagService } from '../rag/rag.service';
 import { RetrievalService } from '../retrieval/retrieval.service';
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
     rag: app.get(RagService, { strict: false }),
     retrieval: app.get(RetrievalService, { strict: false }),
     identity: new McpIdentityProvider(config, app.get(IdentityService, { strict: false })),
+    pdp: app.get(PolicyDecisionPoint, { strict: false }),
   });
 
   await server.connect(new StdioServerTransport());
