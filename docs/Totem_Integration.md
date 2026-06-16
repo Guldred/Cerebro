@@ -12,8 +12,17 @@
 > a `PolicyDecisionPoint` at the single MCP choke point returning allow / deny / **needs-approval** (AuthZEN
 > AARP step-up), reusing the ONE shared policy core (`decideDelegatedAction`) so there is no second
 > enforcement path; a pluggable `MembershipChecker` for `DELEGATION_SENSITIVE_SOURCES` (honest default =
-> `unknown` → needs-approval; connector-backed checker is the key-gated drop-in that truly closes the
-> chunk-ACL window). PDP-off is a no-op. Unit + MCP-integration tests green (198 total).
+> `unknown` → needs-approval). PDP-off is a no-op.
+>
+> **The connector-backed `MembershipChecker` is now shipped for the `github` source**
+> (`DELEGATION_MEMBERSHIP_CHECKER=github`) — it re-confirms **live org membership** at call time, closing the
+> *org-removal* window (org-level, not per-repo collaboration; the connector emits `github-repo:` ACLs, so the
+> SQL pre-filter stays the backstop and repo/team granularity is a refinement). It binds
+> the caller to a GitHub login via a dedicated `identity_links` table (migration 004; deliberately NOT the
+> `principal_mappings` table the SQL ACL pre-filter reads, so an identity link can never widen the read-set)
+> and re-reads **live** org membership at call time. Fail-closed to step-up: only a clean `204`/`404` is
+> `confirmed`/`revoked`; a non-member-token 302 redirect (with `redirect: manual`), rate-limit, 5xx,
+> network error, or a missing link is `unknown`. Unit + wiring + MCP-integration tests green.
 >
 > This document is the Phase-0 deliverable required by [`docs/totem_cerebro_integration_prompt.md`](totem_cerebro_integration_prompt.md).
 > §12 records the decisions; all were taken on the recommended options.
@@ -278,6 +287,7 @@ The existing harness is the right gate — a leak is already a hard, non-absorba
   5. Publish `/.well-known/oauth-protected-resource` (RFC 9728) listing the accepted issuer(s) + scopes for MCP discovery (a new `@Public` route alongside the health controller).
   6. Config flags + boot guards + docs (curl + MCP examples, runnable chain-off, zero external keys) + tests + eval leg.
 - **Phase 2 — continuous runtime re-authorization at the MCP boundary (separately flaggable).** Turn `resolveOrReject` into a PDP: extend its signature to receive **tool name + args** (today it's scope-blind), re-check freshness/revocation/scope per call, and add the **late-binding membership re-check** for `DELEGATION_SENSITIVE_SOURCES`. Model "cannot authorize yet" as an **AARP `needs-approval`/`needs-consent`** structured result. Behind `DELEGATION_PDP_ENABLED`. **Only adds checks; never weakens the fail-closed guarantees.**
+  - *Implemented:* the PDP + AARP step-up, and the **connector-backed membership re-check for `github`** (`DELEGATION_MEMBERSHIP_CHECKER=github`) via a dedicated `identity_links` bind + live org-membership read (§ status banner). Connector oracles for the other sources, and the `source_system`-keyed sensitivity column of Decision F, remain follow-ups.
 
 Each phase = small, reviewable commits per logical step.
 
