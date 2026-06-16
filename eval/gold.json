@@ -123,6 +123,90 @@
         "confluence:EMP-HANDBOOK"
       ],
       "required": true
+    },
+    {
+      "id": "delegation-happy",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "entra-group:hr"
+      ],
+      "relevantDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "required": true,
+      "delegation": {
+        "agent": "agent:hr-copilot/instance-1",
+        "cmd": "/cerebro/search"
+      }
+    },
+    {
+      "id": "delegation-over-scope",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "entra-group:hr"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "expectNotFound": true,
+      "expectDenied": true,
+      "delegation": {
+        "agent": "agent:hr-copilot/instance-1",
+        "cmd": "/cerebro/admin"
+      }
+    },
+    {
+      "id": "delegation-under-entitled-human",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "public"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "expectNotFound": true,
+      "delegation": {
+        "agent": "agent:hr-copilot/instance-1",
+        "cmd": "/cerebro/search"
+      }
+    },
+    {
+      "id": "delegation-revoked",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "entra-group:hr"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "expectNotFound": true,
+      "expectDenied": true,
+      "delegation": {
+        "agent": "agent:hr-copilot/instance-1",
+        "cmd": "/cerebro/search",
+        "revoked": true
+      }
+    },
+    {
+      "id": "delegation-expired",
+      "question": "What are the engineering salary bands for 2026?",
+      "principals": [
+        "entra-group:hr"
+      ],
+      "relevantDocIds": [],
+      "forbiddenDocIds": [
+        "confluence:HR-SALARY-BANDS"
+      ],
+      "expectNotFound": true,
+      "expectDenied": true,
+      "delegation": {
+        "agent": "agent:hr-copilot/instance-1",
+        "cmd": "/cerebro/search",
+        "expired": true
+      }
     }
   ]
 }

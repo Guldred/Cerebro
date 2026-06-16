@@ -11,6 +11,12 @@ export interface RetrievalOptions {
   candidates?: number;
   /** Optional restriction to specific source systems. */
   sourceSystems?: string[];
+  /**
+   * The Totem command path for this call (e.g. `/cerebro/search`, `/cerebro/query`),
+   * used to authorize a delegated caller against the grant. Ignored for
+   * non-delegated callers. Defaults to `/cerebro/search`.
+   */
+  command?: string;
 }
 
 export interface RetrievedChunk {

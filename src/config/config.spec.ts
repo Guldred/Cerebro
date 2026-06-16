@@ -17,6 +17,9 @@ describe('loadConfig boot invariants', () => {
     delete process.env.AUTH_OIDC_JWKS_URL;
     delete process.env.AUTH_OIDC_JWKS_FILE;
     delete process.env.ACL_ENFORCED;
+    for (const k of Object.keys(process.env)) {
+      if (k.startsWith('DELEGATION_')) delete process.env[k];
+    }
   });
 
   afterAll(() => {
@@ -114,5 +117,89 @@ describe('loadConfig boot invariants', () => {
   it('rejects an unknown AUTH_MODE outright', () => {
     process.env.AUTH_MODE = 'none';
     expect(() => loadConfig()).toThrow(/AUTH_MODE must be/);
+  });
+
+  describe('delegation boot invariants (default OFF, backward compatible)', () => {
+    it('defaults: delegation + chain are OFF and the app still boots', () => {
+      const config = loadConfig();
+      expect(config.delegation.enabled).toBe(false);
+      expect(config.delegation.require).toBe(false);
+      expect(config.delegation.pdpEnabled).toBe(false);
+      expect(config.delegation.auditBackend).toBe('local');
+      expect(config.delegation.maxTtlS).toBe(300);
+    });
+
+    it('DELEGATION_ENABLED requires an issuer + audience', () => {
+      process.env.DELEGATION_ENABLED = 'true';
+      expect(() => loadConfig()).toThrow(/requires DELEGATION_ISSUER and DELEGATION_AUDIENCE/);
+    });
+
+    it('DELEGATION_ENABLED requires exactly one of JWKS url / file', () => {
+      process.env.DELEGATION_ENABLED = 'true';
+      process.env.DELEGATION_ISSUER = 'https://totem.local/v2.0';
+      process.env.DELEGATION_AUDIENCE = 'api://cerebro';
+      expect(() => loadConfig()).toThrow(/DELEGATION_JWKS_URL .* or DELEGATION_JWKS_FILE/);
+      process.env.DELEGATION_JWKS_URL = 'https://totem.local/keys';
+      process.env.DELEGATION_JWKS_FILE = '/tmp/d.json';
+      expect(() => loadConfig()).toThrow(/exactly one of DELEGATION_JWKS_URL/);
+    });
+
+    it('a local JWKS file boots in development (CI/local path)', () => {
+      process.env.DELEGATION_ENABLED = 'true';
+      process.env.DELEGATION_ISSUER = 'https://totem.local/v2.0';
+      process.env.DELEGATION_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_JWKS_FILE = '/tmp/delegation-jwks.json';
+      const config = loadConfig();
+      expect(config.delegation.enabled).toBe(true);
+      expect(config.delegation.jwksFile).toBe('/tmp/delegation-jwks.json');
+    });
+
+    it('production refuses a delegation JWKS file (local trust root)', () => {
+      process.env.CEREBRO_ENV = 'production';
+      process.env.AUTH_MODE = 'oidc';
+      process.env.AUTH_OIDC_ISSUER = 'https://login.microsoftonline.com/t/v2.0';
+      process.env.AUTH_OIDC_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_ENABLED = 'true';
+      process.env.DELEGATION_ISSUER = 'https://totem.local/v2.0';
+      process.env.DELEGATION_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_JWKS_FILE = '/tmp/d.json';
+      expect(() => loadConfig()).toThrow(/DELEGATION_JWKS_FILE .* must not be set in production/);
+    });
+
+    it('production refuses a plaintext-http delegation issuer/JWKS', () => {
+      process.env.CEREBRO_ENV = 'production';
+      process.env.AUTH_MODE = 'oidc';
+      process.env.AUTH_OIDC_ISSUER = 'https://login.microsoftonline.com/t/v2.0';
+      process.env.AUTH_OIDC_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_ENABLED = 'true';
+      process.env.DELEGATION_ISSUER = 'http://totem.local/v2.0';
+      process.env.DELEGATION_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_JWKS_URL = 'https://totem.local/keys';
+      expect(() => loadConfig()).toThrow(/DELEGATION_ISSUER must be https/);
+    });
+
+    it('an over-long delegation TTL refuses to boot', () => {
+      process.env.DELEGATION_ENABLED = 'true';
+      process.env.DELEGATION_ISSUER = 'https://totem.local/v2.0';
+      process.env.DELEGATION_AUDIENCE = 'api://cerebro';
+      process.env.DELEGATION_JWKS_URL = 'https://totem.local/keys';
+      process.env.DELEGATION_MAX_TTL_S = '7200';
+      expect(() => loadConfig()).toThrow(/DELEGATION_MAX_TTL_S must be in/);
+    });
+
+    it('DELEGATION_REQUIRE / PDP without DELEGATION_ENABLED refuses to boot', () => {
+      process.env.DELEGATION_REQUIRE = 'true';
+      expect(() => loadConfig()).toThrow(/DELEGATION_REQUIRE=true requires DELEGATION_ENABLED=true/);
+      delete process.env.DELEGATION_REQUIRE;
+      process.env.DELEGATION_PDP_ENABLED = 'true';
+      expect(() => loadConfig()).toThrow(/DELEGATION_PDP_ENABLED=true requires DELEGATION_ENABLED=true/);
+    });
+
+    it('the on-chain anchor is opt-in: onchain backend needs an explicit ack', () => {
+      process.env.DELEGATION_AUDIT_BACKEND = 'onchain';
+      expect(() => loadConfig()).toThrow(/DELEGATION_ONCHAIN_ACK=true/);
+      process.env.DELEGATION_ONCHAIN_ACK = 'true';
+      expect(() => loadConfig()).not.toThrow();
+    });
   });
 });

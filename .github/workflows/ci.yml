@@ -65,3 +65,10 @@ jobs:
       # (signature/issuer/audience/exp run the production code path, offline).
       - name: Eval (local-oidc identity — production verifier path)
         run: EVAL_AUTH=local-oidc npm run eval
+
+      # The same gold set under DELEGATED tokens (Totem): base cases run as a
+      # full-scope delegation (proving delegation-with-full-scope == the human),
+      # plus delegation-specific cases gate the five hard acceptance criteria —
+      # happy / over-scope / under-entitled-human / revoked / expired. Chain OFF.
+      - name: Eval (delegation identity — Totem delegated tokens)
+        run: EVAL_AUTH=delegation npm run eval

@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { decodeJwt } from 'jose';
 import { CONFIG, CerebroConfig } from '../config/config';
+import { DELEGATION_VERIFIER, DelegationVerifier } from './delegation/delegation-verifier';
 import {
   ALL_USERS_PRINCIPAL,
   CallerIdentity,
@@ -38,6 +40,7 @@ export class IdentityService {
   constructor(
     @Inject(CONFIG) private readonly config: CerebroConfig,
     @Optional() @Inject(TOKEN_VERIFIER) verifier?: TokenVerifier,
+    @Optional() @Inject(DELEGATION_VERIFIER) private readonly delegationVerifier?: DelegationVerifier,
   ) {
     this.verifier = verifier ?? new OidcTokenVerifier(config.auth);
   }
@@ -46,7 +49,72 @@ export class IdentityService {
     if (this.config.auth.mode === 'dev-header') {
       return this.fromDevHeader(input.devHeader);
     }
-    return this.fromBearer(input.authorization);
+    // Delegation OFF (default) ⇒ the existing path runs UNCHANGED — backward compat.
+    if (!this.config.delegation?.enabled) {
+      return this.fromBearer(input.authorization);
+    }
+    return this.fromBearerRoutingDelegation(input.authorization);
+  }
+
+  /**
+   * oidc-mode resolution with delegation ENABLED: route by token shape. A token
+   * carrying an `act` claim is verified against the DELEGATION trust root and
+   * yields a delegated identity; a plain OIDC token takes the existing path —
+   * unless DELEGATION_REQUIRE makes a delegated token mandatory.
+   */
+  private async fromBearerRoutingDelegation(authorization?: string): Promise<CallerIdentity> {
+    const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!token) {
+      throw new IdentityError('TOKEN_MISSING', 'Authorization: Bearer <token> is required');
+    }
+    let isDelegated = false;
+    try {
+      // Unverified decode for ROUTING ONLY — the chosen path then fully verifies.
+      isDelegated = (decodeJwt(token) as { act?: unknown }).act !== undefined;
+    } catch {
+      // Not a decodable JWT — fall through to fromBearer, which raises TOKEN_INVALID.
+    }
+    if (isDelegated) return this.fromDelegatedBearer(token);
+    if (this.config.delegation?.require) {
+      throw new IdentityError(
+        'DELEGATION_REQUIRED',
+        'DELEGATION_REQUIRE=true: a delegated token (with an act claim) is required',
+      );
+    }
+    return this.fromBearer(authorization);
+  }
+
+  private async fromDelegatedBearer(token: string): Promise<CallerIdentity> {
+    if (!this.delegationVerifier) {
+      // Enabled in config but not wired — fail closed rather than silently allow.
+      throw new IdentityError('TOKEN_INVALID', 'delegation enabled but no delegation verifier is configured');
+    }
+    const result = await this.delegationVerifier.verifyToken(token);
+    if (!result.ok || !result.delegated || !result.human) {
+      throw new IdentityError(
+        'TOKEN_INVALID',
+        `Delegated token rejected: ${result.reasons.join(', ') || 'no human identity'}`,
+      );
+    }
+    const h = result.human;
+    // Entitlement is the HUMAN's — exactly as fromBearer. Delegation only narrows.
+    return {
+      subject: h.oid,
+      principals: [
+        `${ENTRA_USER_PREFIX}${h.oid}`,
+        ...h.groups.map((g) => `${ENTRA_GROUP_PREFIX}${g}`),
+        ALL_USERS_PRINCIPAL,
+      ],
+      mode: this.config.auth.mode as 'oidc' | 'local-oidc',
+      delegation: {
+        agent: result.agent ?? 'unknown',
+        scope: result.scope,
+        grant: result.grant,
+        principalsAllow: result.principalsAllow,
+        sourcesAllow: result.sourcesAllow,
+        delegationId: result.delegationId,
+      },
+    };
   }
 
   private async fromBearer(authorization?: string): Promise<CallerIdentity> {

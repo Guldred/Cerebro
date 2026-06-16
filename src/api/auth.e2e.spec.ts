@@ -71,6 +71,14 @@ describe('REST auth boundary (dev-header mode)', () => {
     expect(res.body.authMode).toBe('dev-header');
   });
 
+  it('GET /.well-known/oauth-protected-resource is @Public — 200 (RFC 9728 metadata)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/.well-known/oauth-protected-resource')
+      .expect(200);
+    expect(res.body.scopes_supported).toEqual(['cerebro.search', 'cerebro.query']);
+    expect(res.body.bearer_methods_supported).toEqual(['header']);
+  });
+
   it('POST /query accepts the header stub', async () => {
     await request(app.getHttpServer())
       .post('/query')
@@ -105,6 +113,14 @@ describe('REST auth boundary (local-oidc mode — production guard semantics)', 
   it('GET /health stays @Public', async () => {
     const res = await request(app.getHttpServer()).get('/health').expect(200);
     expect(res.body.authMode).toBe('local-oidc');
+  });
+
+  it('protected-resource metadata advertises the resource + OIDC issuer (RFC 9728)', async () => {
+    const res = await request(app.getHttpServer())
+      .get('/.well-known/oauth-protected-resource')
+      .expect(200);
+    expect(res.body.resource).toBe(idp.audience);
+    expect(res.body.authorization_servers).toContain(idp.issuer);
   });
 
   it('POST /query without a token → 401', async () => {

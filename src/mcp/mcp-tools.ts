@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z, ZodRawShape } from 'zod';
@@ -106,12 +107,18 @@ export function createCerebroMcpServer(deps: CerebroMcpDeps): McpServer {
     async (args: { question: string } & CommonToolArgs): Promise<CallToolResult> => {
       const resolved = await resolveOrReject(args.principals);
       if ('error' in resolved) return resolved.error;
-      const result = await deps.rag.answer(args.question, {
-        identity: resolved.identity,
-        topK: args.topK,
-        sourceSystems: args.sourceSystems,
-      });
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      try {
+        const result = await deps.rag.answer(args.question, {
+          identity: resolved.identity,
+          topK: args.topK,
+          sourceSystems: args.sourceSystems,
+          command: '/cerebro/query',
+        });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        if (err instanceof ForbiddenException) return errorResult('DELEGATION_DENIED', err.message);
+        throw err;
+      }
     },
   );
 
@@ -127,14 +134,22 @@ export function createCerebroMcpServer(deps: CerebroMcpDeps): McpServer {
     async (args: { query: string } & CommonToolArgs): Promise<CallToolResult> => {
       const resolved = await resolveOrReject(args.principals);
       if ('error' in resolved) return resolved.error;
-      const results = await deps.retrieval.search(args.query, {
-        identity: resolved.identity,
-        topK: args.topK,
-        sourceSystems: args.sourceSystems,
-      });
-      return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ query: args.query, results }, null, 2) }],
-      };
+      try {
+        const results = await deps.retrieval.search(args.query, {
+          identity: resolved.identity,
+          topK: args.topK,
+          sourceSystems: args.sourceSystems,
+          command: '/cerebro/search',
+        });
+        return {
+          content: [
+            { type: 'text' as const, text: JSON.stringify({ query: args.query, results }, null, 2) },
+          ],
+        };
+      } catch (err) {
+        if (err instanceof ForbiddenException) return errorResult('DELEGATION_DENIED', err.message);
+        throw err;
+      }
     },
   );
 

@@ -1,5 +1,7 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'crypto';
+import { ForbiddenException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { CONFIG, CerebroConfig } from '../config/config';
+import { LocalAppendOnlyAnchor } from '../auth/delegation/local-anchor';
 import { DatabaseService } from '../db/database.service';
 import {
   EMBEDDING_PROVIDER,
@@ -7,6 +9,7 @@ import {
   embedOne,
   toVectorLiteral,
 } from '../embedding/embedding.interface';
+import { authorizeAction, type Args, type AttestationAnchor } from '../totem-sdk';
 import { PrincipalMappingService } from './principal-mapping.service';
 import { RetrievalOptions, RetrievedChunk } from './retrieval.types';
 
@@ -40,6 +43,7 @@ export class RetrievalService {
     private readonly db: DatabaseService,
     @Inject(EMBEDDING_PROVIDER) private readonly embedder: EmbeddingProvider,
     private readonly mapping: PrincipalMappingService,
+    @Optional() @Inject(LocalAppendOnlyAnchor) private readonly anchor?: AttestationAnchor,
   ) {}
 
   async search(query: string, options: RetrievalOptions): Promise<RetrievedChunk[]> {
@@ -59,6 +63,17 @@ export class RetrievalService {
     // so a caller can neither fabricate nor forget it (P1.1).
     const callerPrincipals = await this.mapping.expand(options.identity);
 
+    // The human ACL set (caller principals + public floor) is the VISIBILITY
+    // FLOOR. Delegation can only NARROW it and the requested sources; it never
+    // widens (docs/Totem_Integration.md §4). Runs only for a delegated caller.
+    let aclPrincipals = dedupe([...callerPrincipals, this.config.acl.publicPrincipal]);
+    let effectiveSources = options.sourceSystems;
+    if (options.identity.delegation) {
+      const narrowed = await this.enforceDelegation(options, aclPrincipals);
+      aclPrincipals = narrowed.aclPrincipals;
+      effectiveSources = narrowed.effectiveSources;
+    }
+
     const queryVector = toVectorLiteral(await embedOne(this.embedder, query));
 
     // Build params and the shared ACL/source filter once.
@@ -77,13 +92,13 @@ export class RetrievalService {
 
     const filters: string[] = ['embedding IS NOT NULL'];
     if (this.config.acl.enforced) {
-      // The defining permission-safety guarantee. Principals always include the
-      // public principal (added below), so public content stays visible.
-      const principals = dedupe([...callerPrincipals, this.config.acl.publicPrincipal]);
-      filters.push(`acl_principals && ${p(principals)}::text[]`);
+      // The defining permission-safety guarantee. aclPrincipals = the human's
+      // expanded principals + the public floor, already narrowed by any
+      // delegation allow-list above (strict intersection, never widened).
+      filters.push(`acl_principals && ${p(aclPrincipals)}::text[]`);
     }
-    if (options.sourceSystems && options.sourceSystems.length > 0) {
-      filters.push(`source_system = ANY(${p(options.sourceSystems)})`);
+    if (effectiveSources && effectiveSources.length > 0) {
+      filters.push(`source_system = ANY(${p(effectiveSources)})`);
     }
     const where = filters.join(' AND ');
 
@@ -147,6 +162,82 @@ export class RetrievalService {
     );
 
     return rows.map(toRetrievedChunk);
+  }
+
+  /**
+   * Enforce the delegated scope (docs/Totem_Integration.md §4): authorize the
+   * action against the grant (command narrowing + scalar policy), set-intersect
+   * the requested sources and the ACL principals with the grant's allow-lists,
+   * audit the decision, and DENY (403) on any over-scope. Returns the narrowed
+   * ACL principal set + effective sources for the SQL pre-filter. The human ACL
+   * is still the floor — this can only remove.
+   */
+  private async enforceDelegation(
+    options: RetrievalOptions,
+    aclPrincipals: string[],
+  ): Promise<{ aclPrincipals: string[]; effectiveSources: string[] | undefined }> {
+    const d = options.identity.delegation!;
+    const topK = options.topK ?? this.config.retrieval.topK;
+    const cmd = options.command ?? '/cerebro/search';
+    const args: Args = {
+      topK,
+      ...(options.sourceSystems && options.sourceSystems.length > 0
+        ? { sourceSystems: options.sourceSystems }
+        : {}),
+    };
+
+    const reasons = [...authorizeAction(d.grant, { cmd, args }).reasons];
+
+    // Source narrowing: requested ∩ allowed. An explicit request for ONLY
+    // disallowed sources is over-scope; no request narrows to the allowed subset.
+    let effectiveSources = options.sourceSystems;
+    if (d.sourcesAllow && d.sourcesAllow.length > 0) {
+      const allow = new Set(d.sourcesAllow);
+      if (options.sourceSystems && options.sourceSystems.length > 0) {
+        effectiveSources = options.sourceSystems.filter((s) => allow.has(s));
+        if (effectiveSources.length === 0) reasons.push('delegation/source-not-allowed');
+      } else {
+        effectiveSources = [...allow];
+      }
+    }
+
+    // Principal narrowing (Decision E: the public floor is narrowed too when an
+    // allow-list is present) — strict intersection, never widens.
+    let narrowedPrincipals = aclPrincipals;
+    if (d.principalsAllow && d.principalsAllow.length > 0) {
+      const allow = new Set(d.principalsAllow);
+      narrowedPrincipals = aclPrincipals.filter((pr) => allow.has(pr));
+    }
+
+    const ok = reasons.length === 0;
+    await this.recordDecision(options.identity, cmd, args, ok ? 'allow' : 'deny', reasons);
+    if (!ok) {
+      // No data on an over-scope call (fail-closed). 403 in REST; the MCP layer
+      // maps the thrown exception to an isError tool result.
+      throw new ForbiddenException(`Delegation denied: ${reasons.join(', ')}`);
+    }
+    return { aclPrincipals: narrowedPrincipals, effectiveSources };
+  }
+
+  private async recordDecision(
+    identity: RetrievalOptions['identity'],
+    cmd: string,
+    args: Args,
+    decision: 'allow' | 'deny',
+    reasons: string[],
+  ): Promise<void> {
+    if (!this.anchor) return;
+    const digest = createHash('sha256').update(JSON.stringify(args)).digest('hex');
+    await this.anchor.record({
+      ts: new Date().toISOString(),
+      subject: identity.subject,
+      actor: identity.delegation?.agent,
+      action: cmd,
+      argsDigest: `sha256:${digest}`,
+      decision,
+      reasons,
+      delegationId: identity.delegation?.delegationId,
+    });
   }
 }
 

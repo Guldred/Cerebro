@@ -1,8 +1,16 @@
 # Totem → Cerebro Integration — Design (Phase 0)
 
-> **Status: DESIGN — awaiting review. No implementation code has been written.**
+> **Status: Phase-0 design APPROVED → Phase 1 IMPLEMENTED** on branch `feat/totem-delegation-phase1`
+> (decisions A = algorithm-lift onto JWT, B = RFC 8693 actor claims + OIDC-A vocab, H = bearer/mint-asserted,
+> C–G on their documented defaults). The SDK (`src/totem-sdk/`), the verifier in `IdentityService`, the
+> enforcement intersection in `RetrievalService`, the `AttestationAnchor` (migration 003), the MCP wiring,
+> the RFC 9728 endpoint, config + boot guards, and the eval delegation leg are all in. All three eval legs
+> PASS against live pgvector (dev-header, local-oidc, **delegation** — the 5 hard acceptance cases:
+> happy / over-scope / under-entitled-human / revoked / expired), 0 ACL violations; unit suite green; tsc clean.
+> Phase 2 (per-MCP-call PDP, AARP `needs-approval`) remains, behind `DELEGATION_PDP_ENABLED`.
+>
 > This document is the Phase-0 deliverable required by [`docs/totem_cerebro_integration_prompt.md`](totem_cerebro_integration_prompt.md).
-> It ends with **§12 Decisions I need from you** — please read that section first if you are short on time.
+> §12 records the decisions; all were taken on the recommended options.
 
 Goal: fold Totem's *delegation / attenuation / verification* logic into Cerebro so the combined system is a product — **safe, verifiable, delegated agent access to enterprise data**. Cerebro stays the reference resource server; Totem becomes a standards-aligned delegation layer Cerebro consumes. The blockchain is **not** in the core and **not** in the hot path.
 
@@ -66,8 +74,9 @@ A delegated access token is a **JWT (JWS)** carrying the **RFC 8693 actor-claim*
   // --- attenuation detail (Totem cmd/pol, OIDC-A-aligned) ---
   "delegation": {                                            // NET effective scope (mint computed the chain intersection)
     "cmd": "/cerebro/search",                                 // Totem command path — narrows the action
-    "pol": [ ["in", ".sourceSystems", ["confluence"]] ],     // Totem policy — constrains the request args
-    "principals_allow": ["entra-group:hr"]                    // OPTIONAL strict principal-subset narrowing
+    "pol": [ ["<=", ".topK", 10] ],                          // Totem policy — SCALAR predicates on the request args
+    "sources_allow": ["confluence"],                         // OPTIONAL source-subset narrowing (set ∩, Cerebro-side)
+    "principals_allow": ["entra-group:hr"]                    // OPTIONAL principal-subset narrowing (set ∩, Cerebro-side)
   },
 
   // --- OIDC-A descriptive agent identity (audit/attestation only; NOT resolution keys) ---
@@ -130,7 +139,7 @@ The delegation layer adds checks in the **single identity path** and the **singl
 
 **The intersection, concretely.** Two orthogonal axes, both fail-closed:
 - **Visibility floor = the human's ACL (unchanged).** The SQL pre-filter still runs against the human's expanded principals. An agent can never see a chunk its human can't — this gives the *under-entitled-human* guarantee for free (the colleague-sees-the-sick-leave-ticket case): if the human has no mapping to the protected doc, it's invisible regardless of what the delegation says.
-- **Narrowing = the delegated scope.** `delegation.cmd`/`pol` gate the *action* and *request args* (e.g. restrict `sourceSystems` to `["confluence"]`); `delegation.principals_allow` optionally intersects the principal set down to a subset. Both can only *remove*. `effective_principals = expand(human_principals) ∩ (principals_allow ?? all)`, and the requested action must satisfy `cmd`/`pol` or the call is denied with no data.
+- **Narrowing = the delegated scope.** `delegation.cmd` gates the *action* and `delegation.pol` (**scalar** predicates) constrains scalar request args (e.g. `topK ≤ 10`). Array-valued restrictions — which `sourceSystems` the agent may read, which principal subset it may use — are enforced as **set intersections** in Cerebro's enforcement layer (`requested_sourceSystems ∩ sources_allow`; `expand(human_principals) ∩ principals_allow`), *not* as a single `pol` predicate, since the lifted policy is scalar. All can only *remove*: `effective_principals = expand(human_principals) ∩ (principals_allow ?? all)`, and the requested action must satisfy `cmd`/`pol` and lie within the allowed sets or the call is denied with no data.
 
 ⚠ **Reality check (`sourceSystems` is a hint, not a boundary).** Today `options.sourceSystems` is a retrieval *filter* passed straight through ([mcp-tools.ts:109-113](../src/mcp/mcp-tools.ts:109)). For delegation to enforce a source restriction it must become an *authorization constraint* derived from `pol`, not a caller-supplied hint. Small change, but it's a semantics shift worth calling out. **Decision D.**
 

@@ -3,6 +3,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { ConfigModule } from '../config/config.module';
 import { AuthGuard } from './auth.guard';
+import { DELEGATION_VERIFIER, JoseDelegationVerifier } from './delegation/delegation-verifier';
+import { LocalAppendOnlyAnchor } from './delegation/local-anchor';
 import { IdentityService } from './identity.service';
 
 /**
@@ -16,9 +18,18 @@ import { IdentityService } from './identity.service';
   imports: [ConfigModule],
   providers: [
     IdentityService,
+    LocalAppendOnlyAnchor,
+    {
+      // The delegation verifier (off unless DELEGATION_ENABLED). Built once with
+      // the AttestationAnchor as its revocation source; inert when disabled.
+      provide: DELEGATION_VERIFIER,
+      useFactory: (config: CerebroConfig, anchor: LocalAppendOnlyAnchor) =>
+        new JoseDelegationVerifier(config.delegation, anchor),
+      inject: [CONFIG, LocalAppendOnlyAnchor],
+    },
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
-  exports: [IdentityService],
+  exports: [IdentityService, LocalAppendOnlyAnchor],
 })
 export class AuthModule implements OnApplicationBootstrap {
   private readonly log = new Logger(AuthModule.name);

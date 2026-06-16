@@ -18,6 +18,7 @@
     "eval": "ts-node -r tsconfig-paths/register src/scripts/eval.ts",
     "acl:refresh": "ts-node -r tsconfig-paths/register src/scripts/acl-refresh.ts",
     "auth:dev-jwks": "ts-node -r tsconfig-paths/register src/scripts/dev-jwks.ts",
+    "auth:dev-delegation": "ts-node -r tsconfig-paths/register src/scripts/dev-delegation.ts",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest"
