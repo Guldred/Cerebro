@@ -19,6 +19,7 @@ export class QueryController {
       identity,
       topK: dto.topK,
       sourceSystems: dto.sourceSystems,
+      command: '/cerebro/query',
     });
   }
 
@@ -29,6 +30,7 @@ export class QueryController {
       identity,
       topK: dto.topK,
       sourceSystems: dto.sourceSystems,
+      command: '/cerebro/search',
     });
     return { query: dto.query, results };
   }
