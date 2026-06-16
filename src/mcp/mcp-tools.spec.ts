@@ -4,12 +4,14 @@ import * as path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { IdentityService } from '../auth/identity.service';
+import { CallerIdentity } from '../auth/identity.types';
+import { PolicyDecisionPoint } from '../auth/delegation/pdp';
 import { createLocalIdp, LocalIdp } from '../auth/testing/token-factory';
 import { CerebroConfig } from '../config/config';
 import { RagService } from '../rag/rag.service';
 import { RetrievalService } from '../retrieval/retrieval.service';
 import { McpIdentityProvider } from './mcp-identity';
-import { createCerebroMcpServer } from './mcp-tools';
+import { CerebroMcpDeps, createCerebroMcpServer } from './mcp-tools';
 
 /**
  * Protocol-level exit gates for the MCP identity invariant (P1.2): a real
@@ -59,13 +61,21 @@ function configFor(
   } as CerebroConfig;
 }
 
-async function connect(config: CerebroConfig, services = fakeServices()) {
+const allowPdp = () =>
+  ({ decide: jest.fn(async () => ({ decision: 'allow', reasons: [] })) }) as unknown as PolicyDecisionPoint;
+
+async function connect(
+  config: CerebroConfig,
+  services = fakeServices(),
+  overrides: Partial<Pick<CerebroMcpDeps, 'identity' | 'pdp'>> = {},
+) {
   const identityService = new IdentityService(config);
   const server = createCerebroMcpServer({
     config,
     rag: services.rag,
     retrieval: services.retrieval,
-    identity: new McpIdentityProvider(config, identityService),
+    identity: overrides.identity ?? new McpIdentityProvider(config, identityService),
+    pdp: overrides.pdp ?? allowPdp(),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'spec-client', version: '0.0.0' });
@@ -201,6 +211,71 @@ describe('Cerebro MCP server (local-oidc mode) — P1.2 hard-reject', () => {
     })) as CallResult;
     expect(second.isError).toBe(true);
     expect(second.content[0].text).toContain('TOKEN_INVALID');
+    expect(services.searches).toHaveLength(1);
+  });
+});
+
+describe('Cerebro MCP server — Phase 2 PDP gate (DELEGATION_PDP_ENABLED)', () => {
+  const delegatedIdentity: CallerIdentity = {
+    subject: 'human-1',
+    principals: ['entra-user:human-1', 'entra-group:hr'],
+    mode: 'oidc',
+    delegation: { agent: 'agent:x', grant: { cmd: '/cerebro/search' }, delegationId: 'jti-1' },
+  };
+  // Fake identity provider yielding a delegated caller; the gate logic is what's under test.
+  const fakeIdentity = { resolve: async () => delegatedIdentity } as unknown as McpIdentityProvider;
+  const pdpConfig = (): CerebroConfig =>
+    ({
+      ...configFor('dev-header'),
+      retrieval: { topK: 8 },
+      delegation: { pdpEnabled: true },
+    }) as unknown as CerebroConfig;
+
+  it('deny → isError DELEGATION_DENIED, retrieval untouched', async () => {
+    const services = fakeServices();
+    const pdp = {
+      decide: jest.fn(async () => ({ decision: 'deny', reasons: ['delegation/command-not-permitted'] })),
+    } as unknown as PolicyDecisionPoint;
+    const { client } = await connect(pdpConfig(), services, { identity: fakeIdentity, pdp });
+    const result = (await client.callTool({
+      name: 'cerebro_query',
+      arguments: { question: 'salary' },
+    })) as CallResult;
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('DELEGATION_DENIED');
+    expect(services.searches).toHaveLength(0);
+  });
+
+  it('needs-approval → structured step-up result (NOT isError), retrieval untouched', async () => {
+    const services = fakeServices();
+    const pdp = {
+      decide: jest.fn(async () => ({
+        decision: 'needs-approval',
+        reasons: ['needs:membership-reverification'],
+        prerequisites: [
+          { type: 'membership-reverification', sourceSystem: 'confluence', message: 'step up' },
+        ],
+      })),
+    } as unknown as PolicyDecisionPoint;
+    const { client } = await connect(pdpConfig(), services, { identity: fakeIdentity, pdp });
+    const result = (await client.callTool({
+      name: 'cerebro_search',
+      arguments: { query: 'salary' },
+    })) as CallResult;
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain('needs-approval');
+    expect(result.content[0].text).toContain('membership-reverification');
+    expect(services.searches).toHaveLength(0);
+  });
+
+  it('allow → proceeds to retrieval', async () => {
+    const services = fakeServices();
+    const { client } = await connect(pdpConfig(), services, { identity: fakeIdentity, pdp: allowPdp() });
+    const result = (await client.callTool({
+      name: 'cerebro_search',
+      arguments: { query: 'salary' },
+    })) as CallResult;
+    expect(result.isError).toBeUndefined();
     expect(services.searches).toHaveLength(1);
   });
 });
