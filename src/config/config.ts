@@ -98,6 +98,34 @@ export interface CerebroConfig {
     enforced: boolean;
     publicPrincipal: string;
   };
+
+  /**
+   * Delegated-agent access (docs/Totem_Integration.md). EVERYTHING here defaults
+   * OFF — Cerebro must boot and the eval must pass with delegation disabled and
+   * the chain disabled. When enabled, the delegation trust root is held to the
+   * SAME fail-closed bar as AUTH_MODE (https issuer/JWKS, no local file in prod).
+   */
+  delegation: {
+    /** Master switch (Phase 1). OFF ⇒ an `act`-bearing token is a plain bearer token. */
+    enabled: boolean;
+    /** When ON, a request with no valid delegation is denied (delegation mandatory). */
+    require: boolean;
+    /** Trust root for the delegation mint / token-exchange STS. */
+    issuer: string;
+    audience: string;
+    /** Remote JWKS (production). */
+    jwksUrl: string;
+    /** Local JWKS file (dev/local/CI ONLY — production boot refuses it). */
+    jwksFile: string;
+    /** Cap on delegated-token lifetime in seconds (short by design). */
+    maxTtlS: number;
+    /** Audit/anchor sink: `local` append-only (default) or the optional `onchain` adapter. */
+    auditBackend: 'local' | 'onchain';
+    /** Phase-2 per-MCP-call policy decision point. Independently flaggable. */
+    pdpEnabled: boolean;
+    /** source_systems that trigger a Phase-2 late-binding membership re-check. */
+    sensitiveSources: string[];
+  };
 }
 
 export function loadConfig(): CerebroConfig {
@@ -181,6 +209,22 @@ export function loadConfig(): CerebroConfig {
       enforced: bool('ACL_ENFORCED', true),
       publicPrincipal: str('PUBLIC_PRINCIPAL', 'public'),
     },
+
+    delegation: {
+      enabled: bool('DELEGATION_ENABLED', false),
+      require: bool('DELEGATION_REQUIRE', false),
+      issuer: str('DELEGATION_ISSUER', ''),
+      audience: str('DELEGATION_AUDIENCE', ''),
+      jwksUrl: str('DELEGATION_JWKS_URL', ''),
+      jwksFile: str('DELEGATION_JWKS_FILE', ''),
+      maxTtlS: int('DELEGATION_MAX_TTL_S', 300),
+      auditBackend: str('DELEGATION_AUDIT_BACKEND', 'local') as CerebroConfig['delegation']['auditBackend'],
+      pdpEnabled: bool('DELEGATION_PDP_ENABLED', false),
+      sensitiveSources: str('DELEGATION_SENSITIVE_SOURCES', '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    },
   };
 
   assertBootInvariants(config);
@@ -256,6 +300,45 @@ function assertBootInvariants(c: CerebroConfig): void {
   if (c.auth.mode === 'local-oidc') {
     if (!c.auth.issuer || !c.auth.audience || !c.auth.jwksFile) {
       fail('AUTH_MODE=local-oidc requires AUTH_OIDC_ISSUER, AUTH_OIDC_AUDIENCE and AUTH_OIDC_JWKS_FILE');
+    }
+  }
+
+  // --- Delegation (docs/Totem_Integration.md). All OFF by default; when ON, the
+  //     new trust root is held to the SAME fail-closed bar as AUTH_MODE. ---
+  const d = c.delegation;
+  if (!['local', 'onchain'].includes(d.auditBackend)) {
+    fail(`DELEGATION_AUDIT_BACKEND must be local | onchain, got "${d.auditBackend}"`);
+  }
+  // The chain is opt-in and off by default — turning it on must be loud, never accidental.
+  if (d.auditBackend === 'onchain' && !bool('DELEGATION_ONCHAIN_ACK', false)) {
+    fail('DELEGATION_AUDIT_BACKEND=onchain requires DELEGATION_ONCHAIN_ACK=true (the on-chain anchor is opt-in)');
+  }
+  if (d.require && !d.enabled) fail('DELEGATION_REQUIRE=true requires DELEGATION_ENABLED=true');
+  if (d.pdpEnabled && !d.enabled) fail('DELEGATION_PDP_ENABLED=true requires DELEGATION_ENABLED=true');
+
+  if (d.enabled) {
+    if (!Number.isFinite(d.maxTtlS) || d.maxTtlS <= 0 || d.maxTtlS > 3600) {
+      fail(`DELEGATION_MAX_TTL_S must be in (0, 3600] seconds (got ${d.maxTtlS})`);
+    }
+    if (!d.issuer || !d.audience) {
+      fail('DELEGATION_ENABLED=true requires DELEGATION_ISSUER and DELEGATION_AUDIENCE');
+    }
+    if (!d.jwksUrl && !d.jwksFile) {
+      fail('DELEGATION_ENABLED=true requires DELEGATION_JWKS_URL (remote) or DELEGATION_JWKS_FILE (local)');
+    }
+    if (d.jwksUrl && d.jwksFile) {
+      fail('Set exactly one of DELEGATION_JWKS_URL (remote) or DELEGATION_JWKS_FILE (local), not both');
+    }
+    if (c.env === 'production') {
+      if (d.jwksFile) {
+        fail('DELEGATION_JWKS_FILE (a local JWT trust root) must not be set in production — use DELEGATION_JWKS_URL');
+      }
+      if (!d.issuer.startsWith('https://')) {
+        fail(`DELEGATION_ISSUER must be https:// in production (got "${d.issuer}")`);
+      }
+      if (!d.jwksUrl.startsWith('https://')) {
+        fail(`DELEGATION_JWKS_URL must be https:// in production (got "${d.jwksUrl}")`);
+      }
     }
   }
 }
