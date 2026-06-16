@@ -1,8 +1,16 @@
 # Totem → Cerebro Integration — Design (Phase 0)
 
-> **Status: DESIGN — awaiting review. No implementation code has been written.**
+> **Status: Phase-0 design APPROVED → Phase 1 IMPLEMENTED** on branch `feat/totem-delegation-phase1`
+> (decisions A = algorithm-lift onto JWT, B = RFC 8693 actor claims + OIDC-A vocab, H = bearer/mint-asserted,
+> C–G on their documented defaults). The SDK (`src/totem-sdk/`), the verifier in `IdentityService`, the
+> enforcement intersection in `RetrievalService`, the `AttestationAnchor` (migration 003), the MCP wiring,
+> the RFC 9728 endpoint, config + boot guards, and the eval delegation leg are all in. All three eval legs
+> PASS against live pgvector (dev-header, local-oidc, **delegation** — the 5 hard acceptance cases:
+> happy / over-scope / under-entitled-human / revoked / expired), 0 ACL violations; unit suite green; tsc clean.
+> Phase 2 (per-MCP-call PDP, AARP `needs-approval`) remains, behind `DELEGATION_PDP_ENABLED`.
+>
 > This document is the Phase-0 deliverable required by [`docs/totem_cerebro_integration_prompt.md`](totem_cerebro_integration_prompt.md).
-> It ends with **§12 Decisions I need from you** — please read that section first if you are short on time.
+> §12 records the decisions; all were taken on the recommended options.
 
 Goal: fold Totem's *delegation / attenuation / verification* logic into Cerebro so the combined system is a product — **safe, verifiable, delegated agent access to enterprise data**. Cerebro stays the reference resource server; Totem becomes a standards-aligned delegation layer Cerebro consumes. The blockchain is **not** in the core and **not** in the hot path.
 
