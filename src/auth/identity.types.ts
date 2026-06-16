@@ -1,3 +1,5 @@
+import type { DelegationGrant } from '../totem-sdk';
+
 /**
  * Caller identity model (Plan_Review P1.1/P1.2). A CallerIdentity is minted by
  * IdentityService and NOWHERE else — retrieval and RAG take it instead of a raw
@@ -20,6 +22,28 @@ export interface CallerIdentity {
   readonly principals: readonly string[];
   /** Which AUTH_MODE minted this identity. */
   readonly mode: 'dev-header' | 'local-oidc' | 'oidc';
+  /**
+   * Present iff the caller presented a VALID delegated token (an agent acting on
+   * the human's behalf). The principals above are still the HUMAN's — this only
+   * NARROWS what the agent may do; it never widens. Absent for plain callers.
+   */
+  readonly delegation?: DelegationContext;
+}
+
+/** Delegation context carried alongside the human identity (audit + narrowing). */
+export interface DelegationContext {
+  /** The agent acting on the human's behalf (act.sub) — audit + narrowing only. */
+  readonly agent: string;
+  /** OAuth coarse scope grant. */
+  readonly scope?: string;
+  /** The net effective grant; the enforcement point authorizes the action against it. */
+  readonly grant?: DelegationGrant;
+  /** Strict subset of principals the agent may use (set-intersected at enforcement). */
+  readonly principalsAllow?: readonly string[];
+  /** Strict subset of source systems the agent may read (set-intersected at enforcement). */
+  readonly sourcesAllow?: readonly string[];
+  /** Stable delegation id (jti) for audit + revocation. */
+  readonly delegationId?: string;
 }
 
 export type IdentityErrorCode =
@@ -32,7 +56,9 @@ export type IdentityErrorCode =
    *  from a lookup failure, so we hard-fail (fail-closed). */
   | 'GROUPS_UNRESOLVED'
   /** A path that requires an end-user identity (MCP in oidc mode) has none. */
-  | 'IDENTITY_REQUIRED';
+  | 'IDENTITY_REQUIRED'
+  /** DELEGATION_REQUIRE=true but the caller presented no valid delegated token. */
+  | 'DELEGATION_REQUIRED';
 
 export class IdentityError extends Error {
   constructor(

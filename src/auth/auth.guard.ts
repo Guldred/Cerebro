@@ -58,7 +58,9 @@ export class AuthGuard implements CanActivate {
       });
     } catch (err) {
       if (err instanceof IdentityError) {
-        if (err.code === 'GROUPS_UNRESOLVED') throw new ForbiddenException(err.message);
+        if (err.code === 'GROUPS_UNRESOLVED' || err.code === 'DELEGATION_REQUIRED') {
+          throw new ForbiddenException(err.message);
+        }
         throw new UnauthorizedException(err.message);
       }
       throw err;
