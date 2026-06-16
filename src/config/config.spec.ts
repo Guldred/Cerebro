@@ -201,5 +201,38 @@ describe('loadConfig boot invariants', () => {
       process.env.DELEGATION_ONCHAIN_ACK = 'true';
       expect(() => loadConfig()).not.toThrow();
     });
+
+    it('defaults: the membership checker is the honest "unverified" oracle', () => {
+      expect(loadConfig().delegation.membership.checker).toBe('unverified');
+    });
+
+    it('an unknown DELEGATION_MEMBERSHIP_CHECKER refuses to boot', () => {
+      process.env.DELEGATION_MEMBERSHIP_CHECKER = 'magic';
+      expect(() => loadConfig()).toThrow(/DELEGATION_MEMBERSHIP_CHECKER must be unverified \| github/);
+    });
+
+    it('DELEGATION_MEMBERSHIP_CHECKER=github requires an org', () => {
+      process.env.DELEGATION_MEMBERSHIP_CHECKER = 'github';
+      expect(() => loadConfig()).toThrow(/requires DELEGATION_GITHUB_MEMBERSHIP_ORG/);
+    });
+
+    it('the github membership checker boots in development without a token (keyless → step-up)', () => {
+      process.env.DELEGATION_MEMBERSHIP_CHECKER = 'github';
+      process.env.DELEGATION_GITHUB_MEMBERSHIP_ORG = 'acme';
+      const config = loadConfig();
+      expect(config.delegation.membership.checker).toBe('github');
+      expect(config.delegation.membership.github.org).toBe('acme');
+    });
+
+    it('production refuses the github membership checker without a token', () => {
+      process.env.CEREBRO_ENV = 'production';
+      process.env.AUTH_MODE = 'oidc';
+      process.env.AUTH_OIDC_ISSUER = 'https://login.microsoftonline.com/t/v2.0';
+      process.env.AUTH_OIDC_AUDIENCE = 'api://cerebro';
+      process.env.AUTH_OIDC_JWKS_URL = 'https://login.microsoftonline.com/t/discovery/v2.0/keys';
+      process.env.DELEGATION_MEMBERSHIP_CHECKER = 'github';
+      process.env.DELEGATION_GITHUB_MEMBERSHIP_ORG = 'acme';
+      expect(() => loadConfig()).toThrow(/requires DELEGATION_GITHUB_MEMBERSHIP_TOKEN in production/);
+    });
   });
 });
