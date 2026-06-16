@@ -175,8 +175,16 @@ export interface DelegationResult {
   principalsAllow?: string[];
   /** Net effective source-system allow-list (strict subset), when the grant narrows it. */
   sourcesAllow?: string[];
+  /** The net effective grant, surfaced so the enforcement stage can authorize the action. */
+  grant?: DelegationGrant;
   /** Stable delegation id (`jti`) for audit + revocation. */
   delegationId?: string;
   /** Whether an `act` claim was present (i.e. this was a delegated call). */
   delegated: boolean;
+}
+
+/** The outcome of authorizing a concrete action against a grant (the enforcement stage). */
+export interface ActionDecision {
+  ok: boolean;
+  reasons: string[];
 }

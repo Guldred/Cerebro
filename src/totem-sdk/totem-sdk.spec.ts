@@ -1,6 +1,6 @@
 import { generateKeyPair, type KeyLike } from 'jose';
 import { mintDelegation } from './mint';
-import { verifyDelegation } from './verify';
+import { authorizeAction, verifyDelegation, verifyDelegationToken } from './verify';
 import { commandPermits, normalizeCommand } from './command';
 import { evaluatePolicy } from './policy';
 import type { DelegationGrant, NonceStore, RevocationRegistry, RevocationStatus } from './types';
@@ -216,6 +216,45 @@ describe('totem-sdk', () => {
       const second = await verifyDelegation(token, verifyOpts({ nonceStore }));
       expect(second.ok).toBe(false);
       expect(second.reasons).toContain('delegation/replayed');
+    });
+
+    it('two-stage: verifyDelegationToken accepts the token (no action) and surfaces the grant', async () => {
+      const token = await mint();
+      const res = await verifyDelegationToken(token, {
+        keys: publicKey,
+        issuer: ISSUER,
+        audience: AUDIENCE,
+      });
+      // Token verification passes regardless of the (absent) action; grant is surfaced.
+      expect(res.ok).toBe(true);
+      expect(res.delegated).toBe(true);
+      expect(res.grant?.cmd).toBe('/cerebro/search');
+      expect(res.human?.oid).toBe('human-1');
+
+      // Stage 2 is a separate, pure decision over the surfaced grant.
+      expect(authorizeAction(res.grant, { cmd: '/cerebro/search', args: { topK: 5 } }).ok).toBe(true);
+      const denied = authorizeAction(res.grant, { cmd: '/cerebro/admin', args: { topK: 5 } });
+      expect(denied.ok).toBe(false);
+      expect(denied.reasons).toContain('delegation/command-not-permitted');
+    });
+
+    it('two-stage: an expired token is denied at stage 1 (before any action check)', async () => {
+      const token = await mint({ expiresInS: 60, nowS: 1_000 });
+      const res = await verifyDelegationToken(token, {
+        keys: publicKey,
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        nowS: 10_000,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reasons[0]).toMatch(/token\/invalid/);
+    });
+
+    it('authorizeAction fails closed on a missing grant', () => {
+      expect(authorizeAction(undefined, { cmd: '/cerebro/search' }).ok).toBe(false);
+      expect(authorizeAction(undefined, { cmd: '/cerebro/search' }).reasons).toContain(
+        'delegation/missing-grant',
+      );
     });
 
     it('a registry with no jti to check fails closed', async () => {

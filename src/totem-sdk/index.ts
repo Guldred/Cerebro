@@ -7,11 +7,12 @@
  */
 export { mintDelegation } from './mint';
 export type { MintDelegationOptions, SignKey } from './mint';
-export { verifyDelegation } from './verify';
-export type { KeyInput, VerifyDelegationOptions } from './verify';
+export { verifyDelegation, verifyDelegationToken, authorizeAction } from './verify';
+export type { KeyInput, VerifyDelegationOptions, VerifyTokenOptions } from './verify';
 export { commandPermits, isValidCommand, normalizeCommand } from './command';
 export { evaluatePolicy, evaluatePredicate, globMatch, resolveSelector } from './policy';
 export type {
+  ActionDecision,
   ActorClaim,
   Args,
   AttestationAnchor,
