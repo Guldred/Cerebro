@@ -220,6 +220,63 @@ hard-rejected — no service-credential fallback, no public-only degrade — and
 still sends the legacy `principals` argument gets a loud error, not a silent ignore. Tokens
 never travel as tool arguments (prompt-injection exfiltration channel stays closed).
 
+## Delegated agent access — Totem (default OFF)
+
+When an **agent** calls Cerebro on a human's behalf, it should get the human's access
+**narrowed to a delegated scope — never widened**. Cerebro folds in [Totem](../Totem)'s
+delegation layer, realigned onto OAuth/OIDC standards (no blockchain in the hot path). Design:
+[docs/Totem_Integration.md](docs/Totem_Integration.md).
+
+The delegated credential is a short-TTL **bearer JWT** in the **RFC 8693 actor shape**:
+`sub`=the human (entitlement is still resolved off the human's `oid`), `act`={`sub`: the agent},
+`aud`=Cerebro, plus a net effective `delegation` grant (a Totem `cmd` path + scalar `pol` +
+optional `sources_allow` / `principals_allow`). It is verified by the **same `jose` validation
+the OIDC path uses**, against the `DELEGATION_*` trust root, then enforced as a **strict
+intersection**: the human's ACL stays the visibility floor (the unchanged SQL pre-filter) and
+the grant can only remove — restrict the action, the sources, or the principal subset. Over-scope
+→ **403, no data**. The token rides the same channels as the user token (`Authorization` header
+for REST, `MCP_USER_TOKEN_FILE` for MCP) — **never a tool argument**.
+
+Everything defaults **OFF**: with `DELEGATION_ENABLED=false` Cerebro behaves exactly as above,
+and the eval passes. New knobs (all default off/local, held to the same fail-closed boot bar as
+`AUTH_MODE`): `DELEGATION_ENABLED`, `DELEGATION_REQUIRE`, `DELEGATION_ISSUER`,
+`DELEGATION_AUDIENCE`, `DELEGATION_JWKS_URL` | `DELEGATION_JWKS_FILE`, `DELEGATION_MAX_TTL_S`,
+`DELEGATION_AUDIT_BACKEND` (`local` append-only \| opt-in `onchain`), `DELEGATION_PDP_ENABLED`
+(Phase 2), `DELEGATION_SENSITIVE_SOURCES`.
+
+Try it locally — **zero external keys, chain off**:
+
+```bash
+# Mint a local delegation trust root + a delegated bearer token (prints env + token):
+npm run auth:dev-delegation                      # human in 'hr', full-scope grant (/cerebro)
+# copy the printed AUTH_* and DELEGATION_* lines into the server env, then:
+AUTH_MODE=local-oidc AUTH_OIDC_ISSUER=... DELEGATION_ENABLED=true DELEGATION_ISSUER=... \
+  DELEGATION_AUDIENCE=... DELEGATION_JWKS_FILE=$PWD/.dev/delegation-jwks.json \
+  DELEGATION_MAX_TTL_S=3600 AUTH_OIDC_AUDIENCE=... AUTH_OIDC_JWKS_FILE=$PWD/.dev/delegation-jwks.json \
+  npm run start:dev
+
+# The agent presents the DELEGATED token — entitled human (hr) + in-scope → grounded answer:
+curl -s -X POST localhost:3000/query -H "authorization: Bearer <delegated-token>" \
+  -H 'content-type: application/json' \
+  -d '{"question":"What do the engineering salary bands cover?"}' | jq
+
+# Over-scope: mint a token whose grant does NOT permit search → 403, no data:
+DEV_DLG_CMD=/cerebro/admin npm run auth:dev-delegation
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:3000/query \
+  -H "authorization: Bearer <over-scope-token>" -H 'content-type: application/json' \
+  -d '{"question":"salary bands"}'                # → 403
+
+# RFC 9728 discovery (which issuers/scopes this resource accepts):
+curl -s localhost:3000/.well-known/oauth-protected-resource | jq
+```
+
+The five hard guarantees — **happy path, over-scope, under-entitled human, revoked, expired** —
+are gated end-to-end (zero keys, chain off) by the eval delegation leg:
+
+```bash
+EVAL_AUTH=delegation npm run eval
+```
+
 ## Connecting a real source
 
 `npm run db:seed` ingests whatever `SEED_CONNECTOR` points at. Deletions are reconciled on each
