@@ -9,7 +9,8 @@ import {
   embedOne,
   toVectorLiteral,
 } from '../embedding/embedding.interface';
-import { authorizeAction, type Args, type AttestationAnchor } from '../totem-sdk';
+import { type Args, type AttestationAnchor } from '../totem-sdk';
+import { decideDelegatedAction } from '../auth/delegation/policy-core';
 import { PrincipalMappingService } from './principal-mapping.service';
 import { RetrievalOptions, RetrievedChunk } from './retrieval.types';
 
@@ -186,19 +187,20 @@ export class RetrievalService {
         : {}),
     };
 
-    const reasons = [...authorizeAction(d.grant, { cmd, args }).reasons];
+    // The ONE policy core — shared with the Phase-2 MCP PDP (no forked enforcement).
+    const reasons = [
+      ...decideDelegatedAction(d, { cmd, args, sourceSystems: options.sourceSystems }).reasons,
+    ];
 
-    // Source narrowing: requested ∩ allowed. An explicit request for ONLY
-    // disallowed sources is over-scope; no request narrows to the allowed subset.
+    // Source narrowing for the SQL filter: requested ∩ allowed (no request →
+    // the allowed subset). The over-scope DENY is already captured in `reasons`.
     let effectiveSources = options.sourceSystems;
     if (d.sourcesAllow && d.sourcesAllow.length > 0) {
       const allow = new Set(d.sourcesAllow);
-      if (options.sourceSystems && options.sourceSystems.length > 0) {
-        effectiveSources = options.sourceSystems.filter((s) => allow.has(s));
-        if (effectiveSources.length === 0) reasons.push('delegation/source-not-allowed');
-      } else {
-        effectiveSources = [...allow];
-      }
+      effectiveSources =
+        options.sourceSystems && options.sourceSystems.length > 0
+          ? options.sourceSystems.filter((s) => allow.has(s))
+          : [...allow];
     }
 
     // Principal narrowing (Decision E: the public floor is narrowed too when an
