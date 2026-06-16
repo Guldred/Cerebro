@@ -1,4 +1,5 @@
 import { SignJWT, exportJWK, generateKeyPair, JSONWebKeySet } from 'jose';
+import { mintDelegation, type DelegationGrant } from '../../totem-sdk';
 
 /**
  * Offline Entra-shaped token mint for tests, the eval harness and the
@@ -21,6 +22,22 @@ export interface LocalIdp {
     /** Timespan string ('10m'), absolute epoch seconds (for expired tokens),
      *  or 'none' to OMIT exp entirely (negative test for requiredClaims). */
     expiresIn?: string | number | 'none';
+  }): Promise<string>;
+  /**
+   * Sign a DELEGATED token (RFC 8693 actor shape) with this IdP's key — the
+   * delegation trust root in tests/eval. Same issuer/audience/key as signToken,
+   * so one local IdP can be both the OIDC and the delegation trust root.
+   */
+  signDelegation(opts: {
+    humanOid: string;
+    groups?: string[];
+    agent: string;
+    grant: DelegationGrant;
+    scope?: string;
+    expiresInS?: number;
+    jti?: string;
+    /** Injectable clock (Unix seconds) — set in the past to mint an expired token. */
+    nowS?: number;
   }): Promise<string>;
 }
 
@@ -52,6 +69,23 @@ export async function createLocalIdp(
         .setIssuedAt();
       if (expiresIn !== 'none') builder.setExpirationTime(expiresIn);
       return builder.sign(privateKey);
+    },
+    async signDelegation({ humanOid, groups, agent, grant, scope, expiresInS, jti, nowS }) {
+      return mintDelegation({
+        signKey: privateKey,
+        alg: 'RS256',
+        kid: 'local-test-key',
+        issuer,
+        audience,
+        humanOid,
+        groups,
+        agent,
+        grant,
+        scope,
+        expiresInS,
+        jti,
+        nowS,
+      });
     },
   };
 }
