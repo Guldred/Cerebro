@@ -29,14 +29,16 @@ async function main(): Promise<void> {
     const { stats, cursor } = await ingestion.sync(connector);
     console.log('Delta sync:', { ...stats, cursor });
 
-    const dlq = await db.query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM ingestion_dlq WHERE source_system = $1',
-      [connector.sourceSystem],
-    );
+    // Count the WHOLE DLQ, not WHERE source_system = connector.sourceSystem: a
+    // document is keyed by its OWN source (doc.sourceSystem), which diverges from
+    // connector.sourceSystem for multi-source connectors (the sample emits
+    // confluence:/gitlab: docs under 'sample') — a per-connector filter would
+    // then read 0 and silently miss lingering dark docs. Any dark doc → alert.
+    const dlq = await db.query<{ count: string }>('SELECT count(*)::text AS count FROM ingestion_dlq');
     const dlqCount = Number(dlq.rows[0]?.count ?? 0);
     if (stats.failed > 0 || dlqCount > 0) {
       console.error(
-        `Dead-lettered documents: ${stats.failed} this run, ${dlqCount} total for ${connector.sourceSystem}. ` +
+        `Dead-lettered documents: ${stats.failed} this run, ${dlqCount} in ingestion_dlq total. ` +
           `Inspect ingestion_dlq; retry with a full crawl (npm run db:seed).`,
       );
       process.exitCode = 1;
