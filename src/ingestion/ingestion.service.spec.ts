@@ -1,3 +1,4 @@
+import { CerebroConfig } from '../config/config';
 import { DatabaseService } from '../db/database.service';
 import { EmbeddingProvider } from '../embedding/embedding.interface';
 import { SourceDocument } from '../documents/document.model';
@@ -31,7 +32,7 @@ interface Harness {
   setSuppressed(v: boolean): void;
 }
 
-function harness(): Harness {
+function harness(embedMaxBatch = 96): Harness {
   const queries: { sql: string; params?: unknown[] }[] = [];
   let stored: Record<string, unknown> | null = null;
   let suppressed = false;
@@ -60,8 +61,9 @@ function harness(): Harness {
     },
   };
 
+  const config = { ingestion: { embedMaxBatch } } as CerebroConfig;
   return {
-    service: new IngestionService(db, embedder),
+    service: new IngestionService(config, db, embedder),
     queries,
     embedCalls,
     setStored: (row) => (stored = row),
@@ -107,6 +109,28 @@ describe('IngestionService quarantine (P1.1 fail-closed)', () => {
 
     const chunkInserts = h.queries.filter((q) => q.sql.includes('INSERT INTO chunks'));
     for (const ins of chunkInserts) expect(ins.params![11]).toEqual([]);
+  });
+});
+
+describe('IngestionService embed batch cap (P1.5 — a large doc cannot blow the per-request limit)', () => {
+  const multiSection = '# Doc\n\nIntro paragraph.\n\n## A\n\nAlpha content.\n\n## B\n\nBeta content.\n\n## C\n\nGamma content.';
+
+  it('embeds a whole document in ONE call when it fits the cap', async () => {
+    const h = harness(96);
+    await h.service.ingestDocument(doc({ body: multiSection }));
+    expect(h.embedCalls).toHaveLength(1);
+    expect(h.embedCalls[0].length).toBeGreaterThan(1); // multiple chunks, one batch
+  });
+
+  it('splits the embed into capped batches for a large document (one call per chunk at cap=1)', async () => {
+    const baseline = harness(96);
+    await baseline.service.ingestDocument(doc({ body: multiSection }));
+    const chunkCount = baseline.embedCalls[0].length;
+
+    const capped = harness(1);
+    await capped.service.ingestDocument(doc({ body: multiSection }));
+    expect(capped.embedCalls).toHaveLength(chunkCount); // one call per chunk
+    expect(capped.embedCalls.every((c) => c.length === 1)).toBe(true);
   });
 });
 
@@ -180,7 +204,8 @@ describe('IngestionService.refreshAcls (revocation path, decoupled from content 
         throw new Error('refreshAcls must NEVER embed');
       }),
     };
-    return { service: new IngestionService(db, embedder), queries };
+    const config = { ingestion: { embedMaxBatch: 96 } } as CerebroConfig;
+    return { service: new IngestionService(config, db, embedder), queries };
   }
 
   const storedRow = {

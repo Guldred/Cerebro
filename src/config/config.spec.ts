@@ -32,6 +32,7 @@ describe('loadConfig boot invariants', () => {
     expect(config.env).toBe('development');
     expect(config.auth.mode).toBe('dev-header');
     expect(config.observability.logQueryText).toBe(false); // raw query text is OFF by default (Art. 9)
+    expect(config.ingestion.embedMaxBatch).toBe(96); // per-request embed batch cap
   });
 
   it('production refuses dev-header mode (client-asserted identity)', () => {
