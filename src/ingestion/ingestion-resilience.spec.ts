@@ -1,3 +1,4 @@
+import { CerebroConfig } from '../config/config';
 import { DatabaseService } from '../db/database.service';
 import { EmbeddingProvider } from '../embedding/embedding.interface';
 import { SourceDocument } from '../documents/document.model';
@@ -63,7 +64,8 @@ function harness(opts: { storedCursor?: string | null } = {}) {
     },
   };
 
-  return { service: new IngestionService(db, embedder), docInserts, dlqWrites, dlqClears, cursorSaves };
+  const config = { ingestion: { embedMaxBatch: 96 } } as CerebroConfig;
+  return { service: new IngestionService(config, db, embedder), docInserts, dlqWrites, dlqClears, cursorSaves };
 }
 
 function connector(over: Partial<Connector> & { delta?: Partial<SyncResult>; deltaThrows?: boolean } = {}): Connector {

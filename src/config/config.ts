@@ -94,6 +94,12 @@ export interface CerebroConfig {
     cacheTtlMs: number;
   };
 
+  ingestion: {
+    /** Max chunks per embed() request — caps the per-request batch so one large
+     *  document can't exceed the embedder's item/token limit. 0 disables. */
+    embedMaxBatch: number;
+  };
+
   embedding: {
     provider: 'fake' | 'azure-openai' | 'openai-compatible';
     dim: number;
@@ -237,6 +243,10 @@ export function loadConfig(): CerebroConfig {
 
     mapping: {
       cacheTtlMs: int('PRINCIPAL_MAPPING_CACHE_TTL_MS', 0),
+    },
+
+    ingestion: {
+      embedMaxBatch: int('EMBEDDING_MAX_BATCH', 96),
     },
 
     embedding: {

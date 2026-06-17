@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { CONFIG, CerebroConfig } from '../config/config';
 import { DatabaseService } from '../db/database.service';
-import { EMBEDDING_PROVIDER, EmbeddingProvider, toVectorLiteral } from '../embedding/embedding.interface';
+import { EMBEDDING_PROVIDER, EmbeddingProvider, embedBatched, toVectorLiteral } from '../embedding/embedding.interface';
 import { SourceDocument, documentId } from '../documents/document.model';
 import { chunkMarkdown } from '../documents/chunking/chunker';
 import { LoaderRegistry } from './loaders/loader-registry';
@@ -38,6 +39,7 @@ export class IngestionService {
   private readonly loaders = new LoaderRegistry();
 
   constructor(
+    @Inject(CONFIG) private readonly config: CerebroConfig,
     private readonly db: DatabaseService,
     @Inject(EMBEDDING_PROVIDER) private readonly embedder: EmbeddingProvider,
   ) {}
@@ -128,8 +130,10 @@ export class IngestionService {
     // document title + heading path ("contextual chunk headers") so heading-only
     // terms are captured in the vector too — symmetric with the tsvector, which
     // also indexes title + heading_path + content.
-    const vectors = await this.embedder.embed(
+    const vectors = await embedBatched(
+      this.embedder,
       chunks.map((c) => `${doc.title} ${c.headingPath}\n${c.content}`.trim()),
+      this.config.ingestion.embedMaxBatch,
     );
 
     await this.db.transaction(async (client) => {

@@ -345,6 +345,11 @@ loss**). `npm run sync` exits **non-zero** while DLQ rows remain (so a scheduled
 that now succeed; `deltaSync`'s cursor advances past failures, so the DLQ is the visibility + retry
 counter, not a self-draining queue.
 
+Embedding is **batch-capped** (`EMBEDDING_MAX_BATCH`, default 96): a large document's chunks are split
+across multiple `embed()` calls instead of one, so a single big doc can't exceed the embedder's
+per-request item/token limit. Each chunk is embedded independently, so the vectors are identical to an
+uncapped call.
+
 **GitHub** — documentation files (README + `*.md`/`*.rst`/`*.txt`/…) plus a synthesized
 *repository-overview* document (description, language breakdown, topics, license, and recent commit
 activity) so you can ask "what is this project / what's it built with / is it still maintained?".
