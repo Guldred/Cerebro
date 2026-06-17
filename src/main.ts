@@ -1,14 +1,13 @@
 import 'reflect-metadata';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { CONFIG, CerebroConfig } from './config/config';
 
 async function bootstrap(): Promise<void> {
+  // Input validation is wired as an APP_PIPE in ApiModule (applies on every boot
+  // path), so no useGlobalPipes here.
   const app = await NestFactory.create(AppModule);
-  app.useGlobalPipes(
-    new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: true }),
-  );
 
   const config = app.get<CerebroConfig>(CONFIG);
   await app.listen(config.port);
