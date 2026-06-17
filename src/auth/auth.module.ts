@@ -3,9 +3,11 @@ import { APP_GUARD } from '@nestjs/core';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { ConfigModule } from '../config/config.module';
 import { AuthGuard } from './auth.guard';
+import { DatabaseService } from '../db/database.service';
 import { DELEGATION_VERIFIER, JoseDelegationVerifier } from './delegation/delegation-verifier';
+import { selectMembershipChecker } from './delegation/github-membership';
 import { LocalAppendOnlyAnchor } from './delegation/local-anchor';
-import { MEMBERSHIP_CHECKER, UnverifiedMembershipChecker } from './delegation/membership';
+import { MEMBERSHIP_CHECKER } from './delegation/membership';
 import { PolicyDecisionPoint } from './delegation/pdp';
 import { IdentityService } from './identity.service';
 
@@ -30,7 +32,14 @@ import { IdentityService } from './identity.service';
       inject: [CONFIG, LocalAppendOnlyAnchor],
     },
     // Phase-2 PDP + its membership oracle (inert unless DELEGATION_PDP_ENABLED).
-    { provide: MEMBERSHIP_CHECKER, useClass: UnverifiedMembershipChecker },
+    // Default = the honest `unverified` checker (unknown → step-up); a
+    // connector-backed oracle (e.g. github) is opted into via
+    // DELEGATION_MEMBERSHIP_CHECKER and re-confirms LIVE source membership.
+    {
+      provide: MEMBERSHIP_CHECKER,
+      useFactory: (config: CerebroConfig, db: DatabaseService) => selectMembershipChecker(config, db),
+      inject: [CONFIG, DatabaseService],
+    },
     PolicyDecisionPoint,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],

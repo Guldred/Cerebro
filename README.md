@@ -242,7 +242,8 @@ and the eval passes. New knobs (all default off/local, held to the same fail-clo
 `AUTH_MODE`): `DELEGATION_ENABLED`, `DELEGATION_REQUIRE`, `DELEGATION_ISSUER`,
 `DELEGATION_AUDIENCE`, `DELEGATION_JWKS_URL` | `DELEGATION_JWKS_FILE`, `DELEGATION_MAX_TTL_S`,
 `DELEGATION_AUDIT_BACKEND` (`local` append-only \| opt-in `onchain`), `DELEGATION_PDP_ENABLED`
-(Phase 2), `DELEGATION_SENSITIVE_SOURCES`.
+(Phase 2), `DELEGATION_SENSITIVE_SOURCES`, `DELEGATION_MEMBERSHIP_CHECKER`
+(`unverified` \| `github`) + `DELEGATION_GITHUB_MEMBERSHIP_ORG` / `_TOKEN` / `DELEGATION_GITHUB_API_URL`.
 
 Try it locally — **zero external keys, chain off**:
 
@@ -296,10 +297,32 @@ re-check** via a pluggable `MembershipChecker`.
 > **Honest scope.** Cerebro's `principal_mappings` is already read live per query
 > (`PRINCIPAL_MAPPING_CACHE_TTL_MS=0`), so caller membership is *already* call-time fresh — the
 > only stale layer is a chunk's source ACL, which only a **connector-backed** (key-gated) checker
-> can re-resolve at call time. The shipped default `UnverifiedMembershipChecker` therefore returns
+> can re-resolve at call time. The default `UnverifiedMembershipChecker` returns
 > `unknown` → **needs-approval** for sensitive sources rather than pretending to confirm. So
-> Phase 2's net-new value is the **boundary PDP + AARP step-up**, not membership freshness; the
-> connector-backed checker that truly closes the chunk-ACL window is a later, key-gated drop-in.
+> Phase 2's net-new value is the **boundary PDP + AARP step-up** plus, where a source oracle is
+> wired, real call-time confirmation.
+
+**Connector-backed membership (`DELEGATION_MEMBERSHIP_CHECKER=github`).** The connector oracle for a
+sensitive `github` source: it re-reads **live** GitHub **org** membership at call time, closing the
+*org-removal* window (a caller dropped from the org before the admin-managed mapping is updated).
+This is **org-level**, not repo-level — it confirms org membership, not per-repo collaboration (the
+connector emits `github-repo:<owner/repo>` ACLs), so the SQL pre-filter stays the backstop and
+repo/team-level granularity is a follow-up. The caller's *stable* identity bind
+(Entra `oid` → GitHub login) lives in the
+`identity_links` table — deliberately **separate** from `principal_mappings` (which feeds the SQL
+ACL pre-filter on every query), so an identity link can never leak in as a content grant. The
+*volatile* membership is read from `GET /orgs/{org}/members/{login}`. It is **fail-closed to
+step-up**: only an unambiguous `204` is `confirmed` and a clean `404` is `revoked`; a non-member
+caller token (302 redirect to public members), rate-limit, 5xx, network error, or a missing link
+all return `unknown` → **needs-approval**, never a silent allow. Needs a read token that is itself
+a member of the org (mandatory in production); keyless dev simply steps up.
+
+```bash
+DELEGATION_MEMBERSHIP_CHECKER=github DELEGATION_GITHUB_MEMBERSHIP_ORG=acme \
+  DELEGATION_GITHUB_MEMBERSHIP_TOKEN=ghp_xxx DELEGATION_SENSITIVE_SOURCES=github
+# seed identity_links: INSERT INTO identity_links (entra_principal, source_system, source_login)
+#                      VALUES ('entra-user:<oid>', 'github', '<github-login>');
+```
 
 ## Connecting a real source
 
@@ -391,10 +414,14 @@ Implemented: per-chunk ACL with a hard SQL filter; validated OIDC identity on RE
 unresolved source principal is invisible, never public; Confluence deny/inheritance resolved to
 an effective read-set with quarantine on failure; ACL refresh decoupled from content sync.
 
+Late-binding membership re-check at the MCP boundary is implemented for the `github` source
+(`DELEGATION_MEMBERSHIP_CHECKER=github`, above); other sources still step up rather than confirm.
+
 Still open before sensitive go-live (see [docs/Plan_Review.md](docs/Plan_Review.md)): a
 Graph-backed group resolver for >200-group tokens (today such callers get a deterministic 403),
-attachment object-level ACLs (attachments are not ingested yet), late-binding membership
-re-checks for sensitive spaces, the full GDPR erasure pipeline, and the P2 list (least-privilege
+attachment object-level ACLs (attachments are not ingested yet), connector-backed membership
+oracles for the remaining sources (and repo/team-level granularity for github), the full GDPR
+erasure pipeline, and the P2 list (least-privilege
 ingestion tokens, observability, prompt-injection hardening beyond the evidence envelope).
 
 > **Assumptions (reversible):** Confluence **Cloud**, **Entra ID** identity, default **`bge-m3`**

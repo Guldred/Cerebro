@@ -125,6 +125,27 @@ export interface CerebroConfig {
     pdpEnabled: boolean;
     /** source_systems that trigger a Phase-2 late-binding membership re-check. */
     sensitiveSources: string[];
+    /**
+     * Phase-2 late-binding membership oracle. `unverified` (default) returns the
+     * honest `unknown` → step-up; a connector-backed checker re-confirms LIVE
+     * source-side membership at call time, closing the chunk-ACL window.
+     */
+    membership: {
+      checker: 'unverified' | 'github';
+      github: {
+        /** The GitHub org whose membership gates the sensitive `github` source. */
+        org: string;
+        /**
+         * Read token that is ITSELF a member of `org` — required for an
+         * unambiguous 204/404 from the members API (a non-member token gets a
+         * 302 redirect to the PUBLIC member list, which the checker treats as
+         * `unknown` rather than silently downgrading).
+         */
+        token: string;
+        /** API base — default api.github.com; set for GitHub Enterprise Server. */
+        apiUrl: string;
+      };
+    };
   };
 }
 
@@ -224,6 +245,17 @@ export function loadConfig(): CerebroConfig {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+      membership: {
+        checker: str(
+          'DELEGATION_MEMBERSHIP_CHECKER',
+          'unverified',
+        ) as CerebroConfig['delegation']['membership']['checker'],
+        github: {
+          org: str('DELEGATION_GITHUB_MEMBERSHIP_ORG', ''),
+          token: str('DELEGATION_GITHUB_MEMBERSHIP_TOKEN', ''),
+          apiUrl: str('DELEGATION_GITHUB_API_URL', ''),
+        },
+      },
     },
   };
 
@@ -315,6 +347,24 @@ function assertBootInvariants(c: CerebroConfig): void {
   }
   if (d.require && !d.enabled) fail('DELEGATION_REQUIRE=true requires DELEGATION_ENABLED=true');
   if (d.pdpEnabled && !d.enabled) fail('DELEGATION_PDP_ENABLED=true requires DELEGATION_ENABLED=true');
+
+  // Phase-2 connector-backed membership oracle (consulted only by the PDP).
+  const m = d.membership;
+  if (!['unverified', 'github'].includes(m.checker)) {
+    fail(`DELEGATION_MEMBERSHIP_CHECKER must be unverified | github, got "${m.checker}"`);
+  }
+  if (m.checker === 'github') {
+    if (!m.github.org) {
+      fail('DELEGATION_MEMBERSHIP_CHECKER=github requires DELEGATION_GITHUB_MEMBERSHIP_ORG');
+    }
+    // An unauthenticated (or non-member) token cannot read private org
+    // membership — GitHub redirects to the PUBLIC member list, which the checker
+    // refuses to trust (→ unknown). In production a real org-member token is
+    // mandatory; dev/local may run keyless, where the checker just steps up.
+    if (c.env === 'production' && !m.github.token) {
+      fail('DELEGATION_MEMBERSHIP_CHECKER=github requires DELEGATION_GITHUB_MEMBERSHIP_TOKEN in production');
+    }
+  }
 
   if (d.enabled) {
     if (!Number.isFinite(d.maxTtlS) || d.maxTtlS <= 0 || d.maxTtlS > 3600) {
