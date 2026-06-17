@@ -85,6 +85,14 @@ This must be handled by **retention policy**, not application code:
   older than an erasure receipt must replay the outstanding `erasure_log` entries before serving.
 - State this window in your privacy notice as the erasure-completion SLA.
 
+## Regression gate
+
+`npm run erase:smoke` ([src/scripts/erase-smoke.ts](../src/scripts/erase-smoke.ts), a CI step) proves the
+pipeline end-to-end against the live store: a seeded document is erased → confirmed no longer
+**retrievable** → a re-crawl does **not** resurrect it (the suppression tombstone) → the physical-zeroing
+phase runs. It is self-restoring (re-seeds the document), so it leaves the corpus untouched. This guards
+the EFFECT, which the unit tests (asserting emitted SQL) cannot.
+
 ## Verifying an erasure (verify-on-demand)
 
 The `erasure_log` stores `sha256(ERASURE_PEPPER ‖ mode ‖ ':' ‖ target)`, not the identifier. To answer

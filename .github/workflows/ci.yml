@@ -79,3 +79,10 @@ jobs:
       # leak-gated end-to-end (zero keys), not just unit-tested.
       - name: Eval (overage identity — Graph group resolver)
         run: EVAL_AUTH=overage npm run eval
+
+      # GDPR erasure END-TO-END: erase a seeded doc → assert no longer retrievable,
+      # a re-crawl does not resurrect it (suppression), and the physical-zeroing
+      # phase runs. Self-restoring (re-seeds the doc), so it leaves the corpus as
+      # the eval found it. Runs last so its mutate/restore can't affect the legs.
+      - name: Erasure smoke (erase → not retrievable, self-restoring)
+        run: npm run erase:smoke

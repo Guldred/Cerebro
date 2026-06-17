@@ -18,6 +18,7 @@
     "eval": "ts-node -r tsconfig-paths/register src/scripts/eval.ts",
     "acl:refresh": "ts-node -r tsconfig-paths/register src/scripts/acl-refresh.ts",
     "erase": "ts-node -r tsconfig-paths/register src/scripts/erase.ts",
+    "erase:smoke": "ts-node -r tsconfig-paths/register src/scripts/erase-smoke.ts",
     "auth:dev-jwks": "ts-node -r tsconfig-paths/register src/scripts/dev-jwks.ts",
     "auth:dev-delegation": "ts-node -r tsconfig-paths/register src/scripts/dev-delegation.ts",
     "lint": "eslint \"src/**/*.ts\" --fix",
