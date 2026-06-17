@@ -37,6 +37,13 @@ keys**, so a full erasure is two commands:
 
 Then run the physical phase (below). Record the `erasure_log` receipt id(s) against the DSAR ticket.
 
+### Audit sink is DB-only
+
+The only authorization-record sink is the `delegation_audit` table —
+`LocalAppendOnlyAnchor` writes there via SQL, with **no file/JSONL sink** in any mode. So a subject's
+audit footprint is fully covered by the `eraseSubject` pseudonymization above; there is no out-of-band
+log to sweep separately.
+
 ## What is deliberately NOT erased
 
 - **`delegation_revocations`** (namespace = the human oid) is **retained**. Deleting a revocation would

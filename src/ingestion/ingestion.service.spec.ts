@@ -28,14 +28,19 @@ interface Harness {
   queries: { sql: string; params?: unknown[] }[];
   embedCalls: string[][];
   setStored(row: Record<string, unknown> | null): void;
+  setSuppressed(v: boolean): void;
 }
 
 function harness(): Harness {
   const queries: { sql: string; params?: unknown[] }[] = [];
   let stored: Record<string, unknown> | null = null;
+  let suppressed = false;
 
   const exec = async (sql: string, params?: unknown[]) => {
     queries.push({ sql, params });
+    if (sql.includes('suppressed_documents')) {
+      return { rows: suppressed ? [{ ok: 1 }] : [], rowCount: suppressed ? 1 : 0 };
+    }
     if (sql.includes('SELECT d.content_hash')) return { rows: stored ? [stored] : [] };
     return { rows: [] };
   };
@@ -60,8 +65,31 @@ function harness(): Harness {
     queries,
     embedCalls,
     setStored: (row) => (stored = row),
+    setSuppressed: (v) => (suppressed = v),
   };
 }
+
+describe('IngestionService erasure suppression (P1.4 — the line that makes erasure stick)', () => {
+  it('an erasure-suppressed document is skipped: no embed, no content lookup, no write', async () => {
+    const h = harness();
+    h.setSuppressed(true);
+    const result = await h.service.ingestDocument(doc());
+
+    expect(result).toEqual({ skipped: true, chunks: 0 });
+    expect(h.embedCalls).toHaveLength(0);
+    // Short-circuits BEFORE the content-hash read and any document/chunk write —
+    // a re-crawl can never resurrect the erased document.
+    expect(h.queries.some((q) => q.sql.includes('SELECT d.content_hash'))).toBe(false);
+    expect(h.queries.some((q) => q.sql.includes('INSERT INTO documents'))).toBe(false);
+  });
+
+  it('a non-suppressed document ingests normally (the check does not block live content)', async () => {
+    const h = harness();
+    const result = await h.service.ingestDocument(doc());
+    expect(result.skipped).toBe(false);
+    expect(h.embedCalls.length).toBeGreaterThan(0);
+  });
+});
 
 describe('IngestionService quarantine (P1.1 fail-closed)', () => {
   it('a document with aclStatus=failed is stored with ZERO principals and acl_status=failed', async () => {
