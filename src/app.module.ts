@@ -5,6 +5,7 @@ import { DatabaseModule } from './db/database.module';
 import { EmbeddingModule } from './embedding/embedding.module';
 import { LlmModule } from './llm/llm.module';
 import { IngestionModule } from './ingestion/ingestion.module';
+import { ErasureModule } from './erasure/erasure.module';
 import { RetrievalModule } from './retrieval/retrieval.module';
 import { RagModule } from './rag/rag.module';
 import { ApiModule } from './api/api.module';
@@ -22,6 +23,7 @@ import { ApiModule } from './api/api.module';
     EmbeddingModule,
     LlmModule,
     IngestionModule,
+    ErasureModule,
     RetrievalModule,
     RagModule,
     ApiModule,
