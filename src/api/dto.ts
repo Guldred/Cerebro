@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsArray, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 
 export class QueryDto {
   @IsString()
@@ -37,4 +37,26 @@ export class SearchDto {
   @Min(1)
   @Max(50)
   topK?: number;
+}
+
+export class FeedbackDto {
+  /** The original question — hashed server-side, never stored raw (Art. 9). */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  query!: string;
+
+  @IsIn(['up', 'down'])
+  rating!: 'up' | 'down';
+
+  /** Document ids that were shown in the rated answer. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  chunkIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  comment?: string;
 }

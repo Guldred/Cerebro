@@ -417,6 +417,11 @@ every environment — the foundation for a cost model. The **raw query is never 
 Art. 9 data): events carry a short `queryHash` + `queryChars`; set `OBSERVABILITY_LOG_QUERY_TEXT=true` to
 include the text in a safe debugging environment.
 
+**Feedback.** `POST /feedback` (auth-gated, like `/query`) records a 👍/👎 rating on an answer into
+`query_feedback` — `{ query, rating: "up"|"down", chunkIds?, comment? }`. The query is hashed (same
+`queryHash`), so a rating joins to that query's log trail without storing the text. This is the answer-quality
+signal a future eval/tuning loop consumes.
+
 **Citation faithfulness.** Every answer is citation-verified (machine-checkable, no model needed): a `[n]`
 marker that points outside the evidence actually provided is a **fabricated** source — it is stripped from
 the answer, excluded from the citations, and reported on `RagAnswer.faithfulness` (`allGrounded`,
