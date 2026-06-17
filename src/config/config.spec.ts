@@ -17,8 +17,9 @@ describe('loadConfig boot invariants', () => {
     delete process.env.AUTH_OIDC_JWKS_URL;
     delete process.env.AUTH_OIDC_JWKS_FILE;
     delete process.env.ACL_ENFORCED;
+    delete process.env.AUTH_GROUP_RESOLVER;
     for (const k of Object.keys(process.env)) {
-      if (k.startsWith('DELEGATION_')) delete process.env[k];
+      if (k.startsWith('DELEGATION_') || k.startsWith('GRAPH_')) delete process.env[k];
     }
   });
 
@@ -233,6 +234,46 @@ describe('loadConfig boot invariants', () => {
       process.env.DELEGATION_MEMBERSHIP_CHECKER = 'github';
       process.env.DELEGATION_GITHUB_MEMBERSHIP_ORG = 'acme';
       expect(() => loadConfig()).toThrow(/requires DELEGATION_GITHUB_MEMBERSHIP_TOKEN in production/);
+    });
+  });
+
+  describe('overage group resolver boot invariants (default OFF, backward compatible)', () => {
+    it('defaults to none (the hard-403 on overage is preserved) with securityEnabledOnly=true', () => {
+      const config = loadConfig();
+      expect(config.auth.groupResolver).toBe('none');
+      expect(config.auth.graph.securityEnabledOnly).toBe(true);
+    });
+
+    it('an unknown AUTH_GROUP_RESOLVER refuses to boot', () => {
+      process.env.AUTH_GROUP_RESOLVER = 'ldap';
+      expect(() => loadConfig()).toThrow(/AUTH_GROUP_RESOLVER must be none \| graph/);
+    });
+
+    it('AUTH_GROUP_RESOLVER=graph requires tenant + client + secret', () => {
+      process.env.AUTH_GROUP_RESOLVER = 'graph';
+      expect(() => loadConfig()).toThrow(/requires GRAPH_TENANT_ID, GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET/);
+    });
+
+    it('the graph resolver boots in development with creds', () => {
+      process.env.AUTH_GROUP_RESOLVER = 'graph';
+      process.env.GRAPH_TENANT_ID = 't';
+      process.env.GRAPH_CLIENT_ID = 'c';
+      process.env.GRAPH_CLIENT_SECRET = 's';
+      expect(loadConfig().auth.groupResolver).toBe('graph');
+    });
+
+    it('production refuses a plaintext-http Graph base URL', () => {
+      process.env.CEREBRO_ENV = 'production';
+      process.env.AUTH_MODE = 'oidc';
+      process.env.AUTH_OIDC_ISSUER = 'https://login.microsoftonline.com/t/v2.0';
+      process.env.AUTH_OIDC_AUDIENCE = 'api://cerebro';
+      process.env.AUTH_OIDC_JWKS_URL = 'https://login.microsoftonline.com/t/discovery/v2.0/keys';
+      process.env.AUTH_GROUP_RESOLVER = 'graph';
+      process.env.GRAPH_TENANT_ID = 't';
+      process.env.GRAPH_CLIENT_ID = 'c';
+      process.env.GRAPH_CLIENT_SECRET = 's';
+      process.env.GRAPH_BASE_URL = 'http://graph.local';
+      expect(() => loadConfig()).toThrow(/GRAPH_BASE_URL must be https/);
     });
   });
 });

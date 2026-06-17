@@ -53,6 +53,31 @@ export interface CerebroConfig {
     jwksFile: string;
     clockToleranceS: number;
     groupsClaim: string;
+    /**
+     * Resolver for Entra groups OVERAGE tokens (the `groups` claim omitted
+     * because the user is in too many groups). `none` (default) keeps the
+     * fail-closed hard-403; `graph` resolves the full set from Microsoft Graph.
+     */
+    groupResolver: 'none' | 'graph';
+    graph: {
+      tenantId: string;
+      clientId: string;
+      clientSecret: string;
+      /** Graph API base — default graph.microsoft.com; set for sovereign clouds. */
+      baseUrl: string;
+      /** Token authority — default login.microsoftonline.com. */
+      authority: string;
+      /**
+       * MUST mirror the tenant's `groupMembershipClaims` manifest: `true` =
+       * security groups only (the `SecurityGroup` setting, common); `false` =
+       * all groups + directory roles (`All`). A mismatch under-serves (subset)
+       * or LEAKS principals (superset) — see GraphGroupResolver.
+       */
+      securityEnabledOnly: boolean;
+      /** Per-oid resolved-group cache TTL. 0 (default) = no cache (a re-call per
+       *  overage request; raise to soften Graph throttling, eyes open). */
+      cacheTtlMs: number;
+    };
   };
 
   mcp: {
@@ -183,6 +208,16 @@ export function loadConfig(): CerebroConfig {
       jwksFile: str('AUTH_OIDC_JWKS_FILE', ''),
       clockToleranceS: int('AUTH_CLOCK_TOLERANCE_S', 60),
       groupsClaim: str('AUTH_GROUPS_CLAIM', 'groups'),
+      groupResolver: str('AUTH_GROUP_RESOLVER', 'none') as CerebroConfig['auth']['groupResolver'],
+      graph: {
+        tenantId: str('GRAPH_TENANT_ID', ''),
+        clientId: str('GRAPH_CLIENT_ID', ''),
+        clientSecret: str('GRAPH_CLIENT_SECRET', ''),
+        baseUrl: str('GRAPH_BASE_URL', 'https://graph.microsoft.com'),
+        authority: str('GRAPH_AUTHORITY', 'https://login.microsoftonline.com'),
+        securityEnabledOnly: bool('GRAPH_SECURITY_ENABLED_ONLY', true),
+        cacheTtlMs: int('AUTH_GROUP_RESOLVER_CACHE_TTL_MS', 0),
+      },
     },
 
     mcp: {
@@ -341,6 +376,21 @@ function assertBootInvariants(c: CerebroConfig): void {
     }
     if (c.auth.jwksFile) {
       fail('AUTH_MODE=oidc never reads a JWKS file — use AUTH_MODE=local-oidc for file-based JWKS');
+    }
+  }
+
+  // Overage group resolver (escape hatch for >200-group Entra tokens).
+  if (!['none', 'graph'].includes(c.auth.groupResolver)) {
+    fail(`AUTH_GROUP_RESOLVER must be none | graph, got "${c.auth.groupResolver}"`);
+  }
+  if (c.auth.groupResolver === 'graph') {
+    const g = c.auth.graph;
+    if (!g.tenantId || !g.clientId || !g.clientSecret) {
+      fail('AUTH_GROUP_RESOLVER=graph requires GRAPH_TENANT_ID, GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET');
+    }
+    if (c.env === 'production') {
+      if (!g.baseUrl.startsWith('https://')) fail(`GRAPH_BASE_URL must be https:// in production (got "${g.baseUrl}")`);
+      if (!g.authority.startsWith('https://')) fail(`GRAPH_AUTHORITY must be https:// in production (got "${g.authority}")`);
     }
   }
 
