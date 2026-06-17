@@ -1,4 +1,4 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, Inject, ServiceUnavailableException } from '@nestjs/common';
 import { Public } from '../auth/auth.guard';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { DatabaseService } from '../db/database.service';
@@ -36,5 +36,21 @@ export class HealthController {
       aclEnforced: this.config.acl.enforced,
       authMode: this.config.auth.mode,
     };
+  }
+
+  /**
+   * Readiness probe (vs the liveness/info `/health` above): returns 200 only when
+   * the store is reachable, and **503** otherwise — so a load balancer / k8s
+   * readiness check actually takes the instance out of rotation when its hard
+   * dependency is down, instead of the always-200 liveness check.
+   */
+  @Get('ready')
+  async ready() {
+    try {
+      await this.db.query('SELECT 1');
+    } catch (err) {
+      throw new ServiceUnavailableException({ ready: false, db: false, reason: String(err) });
+    }
+    return { ready: true, db: true };
   }
 }
