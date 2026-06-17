@@ -420,9 +420,40 @@ Late-binding membership re-check at the MCP boundary is implemented for the `git
 Still open before sensitive go-live (see [docs/Plan_Review.md](docs/Plan_Review.md)): a
 Graph-backed group resolver for >200-group tokens (today such callers get a deterministic 403),
 attachment object-level ACLs (attachments are not ingested yet), connector-backed membership
-oracles for the remaining sources (and repo/team-level granularity for github), the full GDPR
-erasure pipeline, and the P2 list (least-privilege
-ingestion tokens, observability, prompt-injection hardening beyond the evidence envelope).
+oracles for the remaining sources (and repo/team-level granularity for github), and the P2 list
+(least-privilege ingestion tokens, observability, prompt-injection hardening beyond the evidence
+envelope).
+
+## GDPR right-to-be-forgotten — erasure (`npm run erase`)
+
+Erasure is **two-phase**: a *logical* erase removes/pseudonymizes the rows immediately and records a
+receipt; a scheduled *physical* phase (`VACUUM FULL`) overwrites the heap bytes and rebuilds the HNSW
+index without the erased vectors. Full operational guidance — the backup/WAL retention residual and
+the completion SLA — is in [docs/Erasure_Runbook.md](docs/Erasure_Runbook.md).
+
+```bash
+ERASE_MODE=documents ERASE_TARGET=confluence:42,github:owner/repo:doc.md ERASE_SCOPE=DSAR-7  npm run erase
+ERASE_MODE=author    ERASE_TARGET="jane.doe"                            ERASE_SCOPE=DSAR-7  npm run erase
+ERASE_MODE=subject   ERASE_TARGET=<entra-oid>                           ERASE_SCOPE=DSAR-7  npm run erase  # footprint only
+ERASE_MODE=vacuum                                                                          npm run erase  # physical-zeroing phase
+```
+
+- **`documents`** — an explicit document-id list (`<source_system>:<external_id>`). Each id is deleted
+  (chunks cascade) **and suppressed**, so a still-present source document is not silently re-ingested by
+  the next crawl. This is the target of the operator-driven content-*mention* path: search, confirm,
+  then erase the confirmed ids — Cerebro never auto-deletes on a fuzzy name match.
+- **`author`** — every document by a source-native author string (chunks cascade + suppressed).
+- **`subject`** — a person's **access/audit footprint** keyed off their Entra `oid`: their
+  `principal_mappings` and `identity_links` user rows are deleted, and their `delegation_audit` rows are
+  **pseudonymized** (`subject → erased:<digest>`, preserving the decision record). It does **not** touch
+  authored content (an oid doesn't reach `documents.author`) — pair it with an `author` erase for a
+  complete DSAR. `delegation_revocations` is deliberately **retained** (deleting a revocation would
+  re-enable a denied-but-still-live token); it ages out via its short TTL.
+
+Each run writes an append-only `erasure_log` receipt that stores a **digest** of the target
+(`sha256(ERASURE_PEPPER ‖ target)`), not the identifier — accountability is verify-on-demand, so the log
+is not itself a store of the personal data it records erasing. Set `ERASURE_PEPPER` to a deployment-wide
+secret in production.
 
 > **Assumptions (reversible):** Confluence **Cloud**, **Entra ID** identity, default **`bge-m3`**
 > embeddings, single trust domain (no multi-tenancy). Change in `.env` / connector config.
