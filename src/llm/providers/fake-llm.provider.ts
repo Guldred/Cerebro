@@ -1,4 +1,4 @@
-import { EvidenceItem, GroundedAnswer, LlmProvider } from '../llm.interface';
+import { EvidenceItem, GroundedAnswer, LlmProvider, usageFrom } from '../llm.interface';
 import { tokenize } from '../../embedding/providers/fake-embedding.provider';
 
 /**
@@ -18,8 +18,16 @@ export class FakeLlmProvider implements LlmProvider {
     question: string,
     evidence: EvidenceItem[],
   ): Promise<GroundedAnswer> {
+    // Estimated usage (no real model/API) so the cost-observability path is
+    // exercised end-to-end on the fake provider too.
+    const promptText = [question, ...evidence.map((e) => e.content)].join('\n');
+    const notFound = (): GroundedAnswer => {
+      const answer = 'Not found in the connected sources.';
+      return { answer, usedCitations: [], usage: usageFrom(undefined, promptText, answer) };
+    };
+
     if (evidence.length === 0) {
-      return { answer: 'Not found in the connected sources.', usedCitations: [] };
+      return notFound();
     }
 
     // Score on CONTENT tokens only (drop stopwords) so a sentence sharing just
@@ -55,7 +63,7 @@ export class FakeLlmProvider implements LlmProvider {
 
     if (top.length === 0) {
       // Evidence retrieved but nothing meaningfully matched the question.
-      return { answer: 'Not found in the connected sources.', usedCitations: [] };
+      return notFound();
     }
 
     const usedCitations: number[] = [];
@@ -64,7 +72,8 @@ export class FakeLlmProvider implements LlmProvider {
       return `${t.sentence} [${t.citation}]`;
     });
 
-    return { answer: parts.join(' '), usedCitations };
+    const answer = parts.join(' ');
+    return { answer, usedCitations, usage: usageFrom(undefined, promptText, answer) };
   }
 }
 

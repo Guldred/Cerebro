@@ -1,5 +1,5 @@
 import { CerebroConfig } from '../../config/config';
-import { EvidenceItem, GroundedAnswer, LlmProvider, parseCitations } from '../llm.interface';
+import { EvidenceItem, GroundedAnswer, LlmProvider, parseCitations, usageFrom } from '../llm.interface';
 import { GROUNDED_SYSTEM_PROMPT, buildUserPrompt } from '../prompt';
 
 /** Azure OpenAI chat completions (EU region for GDPR). Needs AZURE_OPENAI_* env vars. */
@@ -23,6 +23,7 @@ export class AzureOpenAILlmProvider implements LlmProvider {
       `${this.cfg.endpoint.replace(/\/$/, '')}/openai/deployments/${this.cfg.deployment}` +
       `/chat/completions?api-version=${this.cfg.apiVersion}`;
 
+    const userPrompt = buildUserPrompt(question, evidence);
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'api-key': this.cfg.apiKey },
@@ -30,7 +31,7 @@ export class AzureOpenAILlmProvider implements LlmProvider {
         temperature: 0,
         messages: [
           { role: 'system', content: GROUNDED_SYSTEM_PROMPT },
-          { role: 'user', content: buildUserPrompt(question, evidence) },
+          { role: 'user', content: userPrompt },
         ],
       }),
     });
@@ -40,8 +41,15 @@ export class AzureOpenAILlmProvider implements LlmProvider {
       throw new Error(`Azure chat completion failed: ${res.status} ${body}`);
     }
 
-    const json = (await res.json()) as { choices: { message: { content: string } }[] };
+    const json = (await res.json()) as {
+      choices: { message: { content: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
     const answer = json.choices[0]?.message?.content?.trim() ?? '';
-    return { answer, usedCitations: parseCitations(answer) };
+    return {
+      answer,
+      usedCitations: parseCitations(answer),
+      usage: usageFrom(json.usage, `${GROUNDED_SYSTEM_PROMPT}\n${userPrompt}`, answer),
+    };
   }
 }

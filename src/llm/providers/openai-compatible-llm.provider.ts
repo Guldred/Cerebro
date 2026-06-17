@@ -1,5 +1,5 @@
 import { CerebroConfig } from '../../config/config';
-import { EvidenceItem, GroundedAnswer, LlmProvider, parseCitations } from '../llm.interface';
+import { EvidenceItem, GroundedAnswer, LlmProvider, parseCitations, usageFrom } from '../llm.interface';
 import { GROUNDED_SYSTEM_PROMPT, buildUserPrompt } from '../prompt';
 
 /**
@@ -20,6 +20,7 @@ export class OpenAICompatibleLlmProvider implements LlmProvider {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (this.cfg.apiKey) headers.authorization = `Bearer ${this.cfg.apiKey}`;
 
+    const userPrompt = buildUserPrompt(question, evidence);
     const res = await fetch(`${this.cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers,
@@ -28,7 +29,7 @@ export class OpenAICompatibleLlmProvider implements LlmProvider {
         temperature: 0,
         messages: [
           { role: 'system', content: GROUNDED_SYSTEM_PROMPT },
-          { role: 'user', content: buildUserPrompt(question, evidence) },
+          { role: 'user', content: userPrompt },
         ],
       }),
     });
@@ -38,8 +39,15 @@ export class OpenAICompatibleLlmProvider implements LlmProvider {
       throw new Error(`Chat completion failed: ${res.status} ${body}`);
     }
 
-    const json = (await res.json()) as { choices: { message: { content: string } }[] };
+    const json = (await res.json()) as {
+      choices: { message: { content: string } }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    };
     const answer = json.choices[0]?.message?.content?.trim() ?? '';
-    return { answer, usedCitations: parseCitations(answer) };
+    return {
+      answer,
+      usedCitations: parseCitations(answer),
+      usage: usageFrom(json.usage, `${GROUNDED_SYSTEM_PROMPT}\n${userPrompt}`, answer),
+    };
   }
 }
