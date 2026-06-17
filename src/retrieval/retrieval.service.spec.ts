@@ -15,6 +15,7 @@ describe('RetrievalService identity invariant', () => {
     const config = {
       retrieval: { topK: 8, candidates: 40, rrfK: 60, ftsConfig: 'simple', efSearch: 100, iterativeScan: true },
       acl: { enforced: true, publicPrincipal: 'public' },
+      observability: { logQueryText: false },
     } as CerebroConfig;
     const db = { transaction: jest.fn(), query: jest.fn() } as unknown as DatabaseService;
     const embedder = { model: 'fake', dim: 4, embed: jest.fn() } as unknown as EmbeddingProvider;

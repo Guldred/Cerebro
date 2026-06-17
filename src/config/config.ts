@@ -124,6 +124,13 @@ export interface CerebroConfig {
     publicPrincipal: string;
   };
 
+  observability: {
+    /** Include the RAW query text in structured query logs. Default OFF — a query
+     *  can be Art. 9 special-category data, so it is hashed + length-only by
+     *  default (Plan_Review P3). Turn on only for debugging in a safe environment. */
+    logQueryText: boolean;
+  };
+
   /**
    * Delegated-agent access (docs/Totem_Integration.md). EVERYTHING here defaults
    * OFF — Cerebro must boot and the eval must pass with delegation disabled and
@@ -275,6 +282,10 @@ export function loadConfig(): CerebroConfig {
     acl: {
       enforced: bool('ACL_ENFORCED', true),
       publicPrincipal: str('PUBLIC_PRINCIPAL', 'public'),
+    },
+
+    observability: {
+      logQueryText: bool('OBSERVABILITY_LOG_QUERY_TEXT', false),
     },
 
     delegation: {

@@ -11,6 +11,7 @@ import {
 } from '../embedding/embedding.interface';
 import { type Args, type AttestationAnchor } from '../totem-sdk';
 import { decideDelegatedAction } from '../auth/delegation/policy-core';
+import { emitQueryEvent, queryHash } from '../observability/query-log';
 import { PrincipalMappingService } from './principal-mapping.service';
 import { RetrievalOptions, RetrievedChunk } from './retrieval.types';
 
@@ -155,12 +156,22 @@ export class RetrievalService {
       return res.rows;
     });
 
-    const ms = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    // Structured per-query observability (plan §13): which chunks, what scores.
-    this.log.debug(
-      `search topK=${topK} hits=${rows.length} ms=${ms.toFixed(1)} acl=${this.config.acl.enforced} ` +
-        `ids=[${rows.map((r) => r.id).join(',')}]`,
-    );
+    const ms = Math.round((Number(process.hrtime.bigint() - startedAt) / 1e6) * 10) / 10;
+    // Structured per-query observability (plan §13): which chunks, what scores,
+    // how long — query hashed, not stored (Art. 9). One JSON event per search.
+    emitQueryEvent(this.log, {
+      event: 'retrieval',
+      subject: options.identity.subject,
+      ...(options.identity.delegation ? { agent: options.identity.delegation.agent } : {}),
+      queryHash: queryHash(query),
+      queryChars: query.length,
+      ...(this.config.observability.logQueryText ? { query } : {}),
+      hits: rows.length,
+      acl: this.config.acl.enforced,
+      chunkIds: rows.map((r) => r.document_id),
+      scores: rows.map((r) => Math.round(Number(r.score) * 1000) / 1000),
+      ms,
+    });
 
     return rows.map(toRetrievedChunk);
   }
