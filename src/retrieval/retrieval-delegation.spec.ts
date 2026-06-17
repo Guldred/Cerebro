@@ -19,6 +19,7 @@ function makeService() {
   const config = {
     retrieval: { topK: 8, candidates: 40, rrfK: 60, ftsConfig: 'simple', efSearch: 100, iterativeScan: true },
     acl: { enforced: true, publicPrincipal: 'public' },
+    observability: { logQueryText: false },
   } as CerebroConfig;
 
   const captured: { sql: string; params: unknown[] }[] = [];

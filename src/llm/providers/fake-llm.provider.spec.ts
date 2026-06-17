@@ -17,6 +17,19 @@ describe('FakeLlmProvider', () => {
     expect(r.usedCitations).toEqual([]);
   });
 
+  it('reports estimated token usage on every path (cost observability)', async () => {
+    const answered = await llm.generateGroundedAnswer('What is the rollback procedure?', [
+      ev(1, 'The rollback procedure: re-run the previous successful deployment job.'),
+    ]);
+    expect(answered.usage).toBeDefined();
+    expect(answered.usage!.promptTokens).toBeGreaterThan(0);
+    expect(answered.usage!.completionTokens).toBeGreaterThan(0);
+    expect(answered.usage!.totalTokens).toBe(answered.usage!.promptTokens + answered.usage!.completionTokens);
+
+    const abstained = await llm.generateGroundedAnswer('anything?', []);
+    expect(abstained.usage!.totalTokens).toBeGreaterThan(0); // even the abstention path accounts tokens
+  });
+
   it('abstains when evidence is only weakly related', async () => {
     const r = await llm.generateGroundedAnswer('What are the engineering salary bands?', [
       ev(1, 'The weather today is mild and the canteen serves soup.'),

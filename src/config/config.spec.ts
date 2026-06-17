@@ -31,6 +31,7 @@ describe('loadConfig boot invariants', () => {
     const config = loadConfig();
     expect(config.env).toBe('development');
     expect(config.auth.mode).toBe('dev-header');
+    expect(config.observability.logQueryText).toBe(false); // raw query text is OFF by default (Art. 9)
   });
 
   it('production refuses dev-header mode (client-asserted identity)', () => {

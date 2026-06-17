@@ -401,6 +401,17 @@ check model-aware). For generated answers, set `LLM_PROVIDER=openai-compatible`,
 `LLM_BASE_URL=http://localhost:11434/v1`, `LLM_MODEL=<a chat model your Ollama serves>` —
 verified live with `mistral:latest` (grounded prose + citations, permission-filtered).
 
+## Observability
+
+Every query emits one **structured JSON log event** per stage — a `retrieval` event (chunk ids +
+RRF scores, ACL flag, latency) and, for a full answer, a `rag` event (per-stage latency
+`retrievalMs`/`generationMs`/`totalMs`, **token usage** `promptTokens`/`completionTokens`/`totalTokens`,
+cited count, `notFound`). Token usage comes from the provider's API `usage` block (Azure / OpenAI-compatible)
+or a heuristic estimate (fake provider / endpoints that omit it), so the cost/capacity signal is present in
+every environment — the foundation for a cost model. The **raw query is never logged by default** (it can be
+Art. 9 data): events carry a short `queryHash` + `queryChars`; set `OBSERVABILITY_LOG_QUERY_TEXT=true` to
+include the text in a safe debugging environment.
+
 ## Project structure
 
 ```
