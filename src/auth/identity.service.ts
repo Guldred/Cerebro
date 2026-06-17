@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { decodeJwt } from 'jose';
 import { CONFIG, CerebroConfig } from '../config/config';
 import { DELEGATION_VERIFIER, DelegationVerifier } from './delegation/delegation-verifier';
+import { GROUP_RESOLVER, GroupResolver } from './group-resolver';
 import {
   ALL_USERS_PRINCIPAL,
   CallerIdentity,
@@ -41,6 +42,7 @@ export class IdentityService {
     @Inject(CONFIG) private readonly config: CerebroConfig,
     @Optional() @Inject(TOKEN_VERIFIER) verifier?: TokenVerifier,
     @Optional() @Inject(DELEGATION_VERIFIER) private readonly delegationVerifier?: DelegationVerifier,
+    @Optional() @Inject(GROUP_RESOLVER) private readonly groupResolver?: GroupResolver | null,
   ) {
     this.verifier = verifier ?? new OidcTokenVerifier(config.auth);
   }
@@ -123,23 +125,42 @@ export class IdentityService {
       throw new IdentityError('TOKEN_MISSING', 'Authorization: Bearer <token> is required');
     }
     const claims = await this.verifier.verify(token);
+    // On overage the token's `groups` array is a PARTIAL set (or empty) — it is
+    // replaced wholesale by the resolver result, never unioned. Non-overage
+    // tokens already carry the full transitive set, so the resolver is not called.
+    const groups = claims.hasOverage ? await this.resolveOverageGroups(claims.oid) : claims.groups;
+    return this.buildIdentity(claims.oid, groups);
+  }
 
-    if (claims.hasOverage) {
-      // A partial group set is indistinguishable from a lookup failure. The
-      // invariant is "no resolved groups → empty result"; the deterministic
-      // form of that is a hard 403. A Graph-backed GroupResolver is the
-      // documented escape hatch when a tenant actually hits this.
+  /**
+   * Full transitive group set for an overage token. Fail-closed: with no
+   * resolver, or on ANY resolver failure, this raises the same hard
+   * GROUPS_UNRESOLVED (403) — a partial/failed resolution must never degrade to
+   * a partial principal set (which would silently under- or mis-serve the ACL).
+   */
+  private async resolveOverageGroups(oid: string): Promise<string[]> {
+    if (!this.groupResolver) {
       throw new IdentityError(
         'GROUPS_UNRESOLVED',
-        'Token signals groups overage; the full group set cannot be resolved offline',
+        'Token signals groups overage and no Graph group resolver is configured (set AUTH_GROUP_RESOLVER=graph)',
       );
     }
+    try {
+      return await this.groupResolver.resolveGroups(oid);
+    } catch (err) {
+      throw new IdentityError(
+        'GROUPS_UNRESOLVED',
+        `Token signals groups overage; Graph group resolution failed: ${String(err)}`,
+      );
+    }
+  }
 
+  private buildIdentity(oid: string, groups: string[]): CallerIdentity {
     return {
-      subject: claims.oid,
+      subject: oid,
       principals: [
-        `${ENTRA_USER_PREFIX}${claims.oid}`,
-        ...claims.groups.map((g) => `${ENTRA_GROUP_PREFIX}${g}`),
+        `${ENTRA_USER_PREFIX}${oid}`,
+        ...groups.map((g) => `${ENTRA_GROUP_PREFIX}${g}`),
         ALL_USERS_PRINCIPAL,
       ],
       mode: this.config.auth.mode as 'oidc' | 'local-oidc',

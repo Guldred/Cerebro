@@ -9,6 +9,7 @@ import { selectMembershipChecker } from './delegation/github-membership';
 import { LocalAppendOnlyAnchor } from './delegation/local-anchor';
 import { MEMBERSHIP_CHECKER } from './delegation/membership';
 import { PolicyDecisionPoint } from './delegation/pdp';
+import { GROUP_RESOLVER, selectGroupResolver } from './group-resolver';
 import { IdentityService } from './identity.service';
 
 /**
@@ -30,6 +31,13 @@ import { IdentityService } from './identity.service';
       useFactory: (config: CerebroConfig, anchor: LocalAppendOnlyAnchor) =>
         new JoseDelegationVerifier(config.delegation, anchor),
       inject: [CONFIG, LocalAppendOnlyAnchor],
+    },
+    // Overage group resolver (null unless AUTH_GROUP_RESOLVER=graph). IdentityService
+    // injects it @Optional and fail-closes to GROUPS_UNRESOLVED when it is null.
+    {
+      provide: GROUP_RESOLVER,
+      useFactory: (config: CerebroConfig) => selectGroupResolver(config),
+      inject: [CONFIG],
     },
     // Phase-2 PDP + its membership oracle (inert unless DELEGATION_PDP_ENABLED).
     // Default = the honest `unverified` checker (unknown → step-up); a

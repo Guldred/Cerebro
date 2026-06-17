@@ -417,8 +417,19 @@ an effective read-set with quarantine on failure; ACL refresh decoupled from con
 Late-binding membership re-check at the MCP boundary is implemented for the `github` source
 (`DELEGATION_MEMBERSHIP_CHECKER=github`, above); other sources still step up rather than confirm.
 
-Still open before sensitive go-live (see [docs/Plan_Review.md](docs/Plan_Review.md)): a
-Graph-backed group resolver for >200-group tokens (today such callers get a deterministic 403),
+**Groups overage (`AUTH_GROUP_RESOLVER=graph`).** When a user is in too many Entra groups, the access
+token omits the `groups` claim ("overage"). By default such a caller gets a deterministic **403**
+(`GROUPS_UNRESOLVED`) — fail-closed, because a partial group set would silently mis-scope the ACL.
+Set `AUTH_GROUP_RESOLVER=graph` (+ `GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET`) and Cerebro resolves the
+**full** transitive set from Microsoft Graph `getMemberGroups` with an app token — **only on overage**
+(non-overage tokens already carry the full set). It stays fail-closed: any Graph failure (throttling,
+>11k groups, network) maps to the same 403, never a partial set. **`GRAPH_SECURITY_ENABLED_ONLY` must
+mirror the tenant's `groupMembershipClaims` manifest** (`true` = security groups only; `false` = all
+groups + directory roles) — a mismatch under-serves or *leaks* principals to overage users. This
+applies to the plain-bearer path; a delegated token carries its human's groups from the delegation
+mint (RFC 8693), not the Entra access token, so it does not route through the overage resolver.
+
+Still open before sensitive go-live (see [docs/Plan_Review.md](docs/Plan_Review.md)):
 attachment object-level ACLs (attachments are not ingested yet), connector-backed membership
 oracles for the remaining sources (and repo/team-level granularity for github), and the P2 list
 (least-privilege ingestion tokens, observability, prompt-injection hardening beyond the evidence

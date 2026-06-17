@@ -7,6 +7,17 @@ import { IdentityError } from './identity.types';
 import { OidcTokenVerifier } from './token-verifier';
 import { createLocalIdp, LocalIdp } from './testing/token-factory';
 
+/** Group-resolver config the verifier never reads (it only needs issuer/aud/jwks). */
+const GRAPH_DEFAULTS: CerebroConfig['auth']['graph'] = {
+  tenantId: '',
+  clientId: '',
+  clientSecret: '',
+  baseUrl: 'https://graph.microsoft.com',
+  authority: 'https://login.microsoftonline.com',
+  securityEnabledOnly: true,
+  cacheTtlMs: 0,
+};
+
 /**
  * Verifier rejection suite (Phase-2 exit gate). The SAME OidcTokenVerifier runs
  * in production; here it validates against a local JWKS file, so every branch —
@@ -33,6 +44,8 @@ describe('OidcTokenVerifier', () => {
       jwksFile,
       clockToleranceS: 5,
       groupsClaim: 'groups',
+      groupResolver: 'none',
+      graph: GRAPH_DEFAULTS,
     };
     verifier = new OidcTokenVerifier(auth);
   });
@@ -143,6 +156,8 @@ describe('OidcTokenVerifier (oidc mode — remote JWKS trust root)', () => {
       jwksFile: '',
       clockToleranceS: 5,
       groupsClaim: 'groups',
+      groupResolver: 'none',
+      graph: GRAPH_DEFAULTS,
     });
   });
 
