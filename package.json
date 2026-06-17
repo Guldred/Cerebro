@@ -15,6 +15,7 @@
     "mcp": "ts-node --transpile-only -r tsconfig-paths/register src/mcp/mcp-server.ts",
     "db:migrate": "ts-node -r tsconfig-paths/register src/scripts/migrate.ts",
     "db:seed": "ts-node -r tsconfig-paths/register src/scripts/seed.ts",
+    "sync": "ts-node -r tsconfig-paths/register src/scripts/sync.ts",
     "eval": "ts-node -r tsconfig-paths/register src/scripts/eval.ts",
     "acl:refresh": "ts-node -r tsconfig-paths/register src/scripts/acl-refresh.ts",
     "erase": "ts-node -r tsconfig-paths/register src/scripts/erase.ts",

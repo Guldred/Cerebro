@@ -16,6 +16,8 @@ export interface IngestStats {
   aclUpdated: number;
   /** Documents quarantined because permission resolution failed (invisible). */
   quarantined: number;
+  /** Documents whose ingestion threw — dead-lettered to ingestion_dlq, crawl continued. */
+  failed: number;
 }
 
 export interface AclRefreshStats {
@@ -236,24 +238,35 @@ export class IngestionService {
     return stats;
   }
 
-  /** GDPR right-to-be-forgotten: remove a document and all its vectors (cascade). */
+  /** Tombstone delete: a document removed at the source (reconciliation /
+   *  deltaSync). Removes the document + its vectors (cascade) and clears any DLQ
+   *  row, so a failed-then-deleted document leaves no ghost. (GDPR erasure has
+   *  its own path in ErasureService — this is source-driven deletion.) */
   async deleteDocument(sourceSystem: string, externalId: string): Promise<void> {
-    await this.db.query('DELETE FROM documents WHERE id = $1', [
-      documentId(sourceSystem, externalId),
-    ]);
+    const id = documentId(sourceSystem, externalId);
+    await this.db.query('DELETE FROM documents WHERE id = $1', [id]);
+    await this.clearDlq(id);
   }
 
-  /** Full crawl + reconcile: ingest everything the connector returns, then delete
-   *  any previously-stored document of that source that the crawl no longer sees
-   *  (tombstone handling — plan §6.1). */
-  async runInitialCrawl(connector: Connector): Promise<IngestStats> {
-    const docs = await connector.initialCrawl();
-    const stats: IngestStats = { ingested: 0, skipped: 0, deleted: 0, chunks: 0, aclUpdated: 0, quarantined: 0 };
+  // ── resilient per-document ingest + dead-letter queue (Plan_Review P1.5) ─────
 
-    const seen = new Set<string>();
-    for (const doc of docs) {
-      seen.add(documentId(doc.sourceSystem, doc.externalId));
+  private newStats(): IngestStats {
+    return { ingested: 0, skipped: 0, deleted: 0, chunks: 0, aclUpdated: 0, quarantined: 0, failed: 0 };
+  }
+
+  /**
+   * Ingest ONE document with per-document resilience: a failure is dead-lettered
+   * and the crawl CONTINUES — one poison document never aborts the batch. A
+   * success clears any prior DLQ row. (ingestDocument is transactional and embeds
+   * BEFORE opening the transaction, so a failed re-ingest of an existing document
+   * rolls back / never starts — the last-good version stays live. A transient
+   * embedder hiccup degrades to staleness, not data loss; keep it that way.)
+   */
+  private async ingestOne(doc: SourceDocument, stats: IngestStats): Promise<void> {
+    const id = documentId(doc.sourceSystem, doc.externalId);
+    try {
       const r = await this.ingestDocument(doc);
+      await this.clearDlq(id);
       if (r.quarantined) stats.quarantined++;
       if (r.skipped) stats.skipped++;
       else if (r.aclOnly) stats.aclUpdated++;
@@ -261,6 +274,74 @@ export class IngestionService {
         stats.ingested++;
         stats.chunks += r.chunks;
       }
+    } catch (err) {
+      stats.failed++;
+      this.log.error(`Document ${id} failed ingest — dead-lettered (crawl continues): ${String(err)}`);
+      await this.recordDlq(doc, err);
+    }
+  }
+
+  private async recordDlq(doc: SourceDocument, err: unknown): Promise<void> {
+    try {
+      await this.db.query(
+        `INSERT INTO ingestion_dlq (document_id, source_system, external_id, error, attempts)
+         VALUES ($1, $2, $3, $4, 1)
+         ON CONFLICT (document_id) DO UPDATE SET
+           error = EXCLUDED.error, attempts = ingestion_dlq.attempts + 1, last_failed_at = now()`,
+        [documentId(doc.sourceSystem, doc.externalId), doc.sourceSystem, doc.externalId, String(err).slice(0, 1000)],
+      );
+    } catch (dlqErr) {
+      // Best-effort: a DLQ write failure (e.g. DB down) must not mask the crawl.
+      this.log.error(`DLQ write failed for ${doc.sourceSystem}:${doc.externalId}: ${String(dlqErr)}`);
+    }
+  }
+
+  private async clearDlq(id: string): Promise<void> {
+    await this.db.query('DELETE FROM ingestion_dlq WHERE document_id = $1', [id]);
+  }
+
+  // ── durable delta-sync cursor (Plan_Review P1.5) ────────────────────────────
+
+  async loadCursor(sourceSystem: string): Promise<string | null> {
+    const res = await this.db.query<{ cursor: string | null }>(
+      'SELECT cursor FROM sync_cursors WHERE source_system = $1',
+      [sourceSystem],
+    );
+    return res.rows[0]?.cursor ?? null;
+  }
+
+  private async saveCursor(sourceSystem: string, cursor: string | null): Promise<void> {
+    await this.db.query(
+      `INSERT INTO sync_cursors (source_system, cursor, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (source_system) DO UPDATE SET cursor = EXCLUDED.cursor, updated_at = now()`,
+      [sourceSystem, cursor],
+    );
+  }
+
+  /**
+   * Incremental sync: resume from the stored cursor, then persist the new one.
+   * The cursor is saved ONLY after a successful runDeltaSync — if the source API
+   * throws, it propagates (cursor unchanged, the window is retried next run).
+   * Do NOT wrap this in a try that swallows the throw.
+   */
+  async sync(connector: Connector): Promise<{ stats: IngestStats; cursor: string | null }> {
+    const cursor = await this.loadCursor(connector.sourceSystem);
+    const result = await this.runDeltaSync(connector, cursor);
+    await this.saveCursor(connector.sourceSystem, result.cursor);
+    return result;
+  }
+
+  /** Full crawl + reconcile: ingest everything the connector returns, then delete
+   *  any previously-stored document of that source that the crawl no longer sees
+   *  (tombstone handling — plan §6.1). */
+  async runInitialCrawl(connector: Connector): Promise<IngestStats> {
+    const docs = await connector.initialCrawl();
+    const stats = this.newStats();
+
+    const seen = new Set<string>();
+    for (const doc of docs) {
+      seen.add(documentId(doc.sourceSystem, doc.externalId));
+      await this.ingestOne(doc, stats);
     }
 
     const stored = await this.db.query<{ id: string }>(
@@ -270,36 +351,38 @@ export class IngestionService {
     for (const row of stored.rows) {
       if (!seen.has(row.id)) {
         await this.db.query('DELETE FROM documents WHERE id = $1', [row.id]);
+        await this.clearDlq(row.id); // a reconciled-away doc leaves no ghost DLQ row
         stats.deleted++;
       }
     }
 
     this.log.log(
-      `initialCrawl(${connector.sourceSystem}): ingested=${stats.ingested} skipped=${stats.skipped} deleted=${stats.deleted} chunks=${stats.chunks}`,
+      `initialCrawl(${connector.sourceSystem}): ingested=${stats.ingested} skipped=${stats.skipped} ` +
+        `deleted=${stats.deleted} chunks=${stats.chunks} failed=${stats.failed}`,
     );
     return stats;
   }
 
-  /** Incremental sync: ingest changes, remove tombstoned documents. */
+  /** Incremental sync core: ingest changes, remove tombstoned documents. A
+   *  per-document failure is dead-lettered (the batch continues); a wholesale
+   *  connector.deltaSync() throw propagates (so sync() does not advance the
+   *  cursor). Prefer sync() — it loads + persists the cursor around this. */
   async runDeltaSync(connector: Connector, cursor: string | null): Promise<{ stats: IngestStats; cursor: string | null }> {
     const result = await connector.deltaSync(cursor);
-    const stats: IngestStats = { ingested: 0, skipped: 0, deleted: 0, chunks: 0, aclUpdated: 0, quarantined: 0 };
+    const stats = this.newStats();
 
     for (const doc of result.documents) {
-      const r = await this.ingestDocument(doc);
-      if (r.quarantined) stats.quarantined++;
-      if (r.skipped) stats.skipped++;
-      else if (r.aclOnly) stats.aclUpdated++;
-      else {
-        stats.ingested++;
-        stats.chunks += r.chunks;
-      }
+      await this.ingestOne(doc, stats);
     }
     for (const externalId of result.deletedExternalIds) {
       await this.deleteDocument(connector.sourceSystem, externalId);
       stats.deleted++;
     }
 
+    this.log.log(
+      `deltaSync(${connector.sourceSystem}): ingested=${stats.ingested} skipped=${stats.skipped} ` +
+        `deleted=${stats.deleted} chunks=${stats.chunks} failed=${stats.failed}`,
+    );
     return { stats, cursor: result.cursor };
   }
 }

@@ -326,8 +326,24 @@ DELEGATION_MEMBERSHIP_CHECKER=github DELEGATION_GITHUB_MEMBERSHIP_ORG=acme \
 
 ## Connecting a real source
 
-`npm run db:seed` ingests whatever `SEED_CONNECTOR` points at. Deletions are reconciled on each
-full crawl; re-running is idempotent (unchanged docs are skipped).
+`npm run db:seed` ingests whatever `SEED_CONNECTOR` points at (a **full crawl**: every document the
+source returns, with deletions reconciled). Re-running is idempotent (unchanged docs are skipped).
+
+`npm run sync` is the **incremental** path (same `SEED_CONNECTOR`): it resumes from a durable
+per-connector cursor (`sync_cursors`), ingests changes + tombstones, and persists the new cursor — so
+freshness doesn't cost a full re-crawl. The cursor advances only after a successful sync; if the source
+API throws, it's left unchanged and the window is retried next run. (How much work the delta actually
+saves depends on the connector's `deltaSync` — real connectors return only changes since the cursor; the
+bundled `sample` connector is a fixture and re-offers everything, idempotently skipped.)
+
+**Resilience.** A per-document failure (embedder error, malformed content) is **dead-lettered** to
+`ingestion_dlq` and the crawl **continues** — one poison document never aborts the whole batch.
+`ingestDocument` is transactional and embeds *before* the transaction opens, so a failed re-ingest of an
+existing doc leaves the last-good version live (a transient hiccup degrades to **staleness, not data
+loss**). `npm run sync` exits **non-zero** while DLQ rows remain (so a scheduled run alerts, mirroring
+`acl:refresh`). **Retry is by full crawl** — `npm run db:seed` re-fetches everything and clears DLQ rows
+that now succeed; `deltaSync`'s cursor advances past failures, so the DLQ is the visibility + retry
+counter, not a self-draining queue.
 
 **GitHub** — documentation files (README + `*.md`/`*.rst`/`*.txt`/…) plus a synthesized
 *repository-overview* document (description, language breakdown, topics, license, and recent commit
