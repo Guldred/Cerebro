@@ -45,6 +45,16 @@ export class IngestionService {
     doc: SourceDocument,
   ): Promise<{ skipped: boolean; chunks: number; aclOnly?: boolean; quarantined?: boolean }> {
     const id = documentId(doc.sourceSystem, doc.externalId);
+
+    // ERASURE SUPPRESSION (Plan_Review P1.4): a document erased for GDPR must not
+    // be silently resurrected by a later crawl while it still exists at the
+    // source. One indexed PK lookup before any work; suppressed → never written.
+    const suppressed = await this.db.query('SELECT 1 FROM suppressed_documents WHERE document_id = $1', [id]);
+    if ((suppressed.rowCount ?? 0) > 0) {
+      this.log.warn(`Document ${id} is erasure-suppressed — skipping re-ingest`);
+      return { skipped: true, chunks: 0 };
+    }
+
     const body = this.loaders.toMarkdown(doc.contentType, doc.body);
 
     // QUARANTINE (Plan_Review P1.1): a document whose permissions could not be

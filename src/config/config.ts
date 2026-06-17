@@ -147,6 +147,17 @@ export interface CerebroConfig {
       };
     };
   };
+
+  /** GDPR erasure (Plan_Review P1.4). */
+  erasure: {
+    /**
+     * Deployment-wide pepper for the erasure-receipt digest
+     * (`sha256(pepper ‖ identifier)`). Keeps `erasure_log` non-identifying while
+     * staying verify-on-demand. A secret, not per-row salt, so recompute is
+     * deterministic; empty in dev (the erase script warns).
+     */
+    pepper: string;
+  };
 }
 
 export function loadConfig(): CerebroConfig {
@@ -256,6 +267,10 @@ export function loadConfig(): CerebroConfig {
           apiUrl: str('DELEGATION_GITHUB_API_URL', ''),
         },
       },
+    },
+
+    erasure: {
+      pepper: str('ERASURE_PEPPER', ''),
     },
   };
 
