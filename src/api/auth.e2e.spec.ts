@@ -90,6 +90,16 @@ describe('REST auth boundary (dev-header mode)', () => {
   it('POST /query without the header still works (empty principals → public-only)', async () => {
     await request(app.getHttpServer()).post('/query').send({ question: 'anything' }).expect(201);
   });
+
+  it('POST /feedback records a rating (201)', async () => {
+    // Note: DTO validation (rating ∈ {up,down}) runs via the main.ts global
+    // ValidationPipe; the Test-module app here exercises routing + auth, not the
+    // pipe. The @IsIn constraint is unit-covered by the DTO + verified in prod.
+    await request(app.getHttpServer())
+      .post('/feedback')
+      .send({ query: 'salary bands?', rating: 'up', chunkIds: ['confluence:HR-SALARY-BANDS'] })
+      .expect(201);
+  });
 });
 
 describe('REST auth boundary (local-oidc mode — production guard semantics)', () => {
@@ -163,5 +173,9 @@ describe('REST auth boundary (local-oidc mode — production guard semantics)', 
 
   it('POST /search enforces the same boundary', async () => {
     await request(app.getHttpServer()).post('/search').send({ query: 'x' }).expect(401);
+  });
+
+  it('POST /feedback is auth-gated like the rest — no token → 401', async () => {
+    await request(app.getHttpServer()).post('/feedback').send({ query: 'x', rating: 'up' }).expect(401);
   });
 });
