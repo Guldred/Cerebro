@@ -72,3 +72,10 @@ jobs:
       # happy / over-scope / under-entitled-human / revoked / expired. Chain OFF.
       - name: Eval (delegation identity — Totem delegated tokens)
         run: EVAL_AUTH=delegation npm run eval
+
+      # The same gold set through the groups-OVERAGE path: tokens carry the
+      # overage marker (no groups claim) and a LOCAL fake Microsoft Graph feeds
+      # the REAL GraphGroupResolver, so overage → resolver → SQL ACL filter is
+      # leak-gated end-to-end (zero keys), not just unit-tested.
+      - name: Eval (overage identity — Graph group resolver)
+        run: EVAL_AUTH=overage npm run eval

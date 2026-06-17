@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { promises as fs } from 'fs';
+import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { ForbiddenException } from '@nestjs/common';
@@ -23,7 +24,7 @@ import type { DelegationGrant, Predicate } from '../totem-sdk';
  * separately and excluded from the gate when running on the fake provider.
  *
  * IDENTITY (Phase 2): every case resolves its caller through IdentityService —
- * the same minting point as REST and MCP. Two legs:
+ * the same minting point as REST and MCP. Legs (CI runs all):
  *
  *   AUTH_MODE=dev-header (default) — case principals pass through the stub
  *     verbatim, byte-identical to the MVP behavior.
@@ -31,7 +32,10 @@ import type { DelegationGrant, Predicate } from '../totem-sdk';
  *     boots the app in AUTH_MODE=local-oidc against it, and mints a REAL JWT
  *     per case (entra-group:* principals become groups claims). The production
  *     verifier code path — signature, issuer, audience, exp — gates the same
- *     gold set, fully offline. CI runs both legs.
+ *     gold set, fully offline.
+ *   EVAL_AUTH=delegation — the same gold set under Totem delegated tokens.
+ *   EVAL_AUTH=overage — tokens carry the overage marker (no groups claim) and a
+ *     local fake Graph feeds the REAL resolver (see setupOverage).
  */
 interface GoldCase {
   id: string;
@@ -114,6 +118,65 @@ async function setupDelegation(): Promise<LocalIdp> {
   return idp;
 }
 
+interface OverageSetup {
+  idp: LocalIdp;
+  server: http.Server;
+  /** oid → the groups the fake Graph returns for that user (= the case's groups). */
+  groupsByOid: Map<string, string[]>;
+}
+
+/**
+ * Boot-time setup for the OVERAGE leg: prove the groups-overage path end-to-end
+ * with zero keys. A token carries `hasgroups:true` and NO groups claim; a LOCAL
+ * fake Microsoft Graph (app-token endpoint + getMemberGroups) returns the case's
+ * groups, and the REAL GraphGroupResolver runs against it. So the FULL chain —
+ * overage token → resolver → principal_mappings expand → SQL ACL filter — is
+ * exercised and leak-gated, not just unit-tested. Results must match the
+ * local-oidc leg exactly (same groups, delivered via Graph instead of the claim);
+ * a resolver that dropped, unioned, or widened the set fails recall or leaks.
+ */
+async function setupOverage(): Promise<OverageSetup> {
+  const idp = await createLocalIdp();
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cerebro-eval-overage-'));
+  const jwksFile = path.join(dir, 'jwks.json');
+  await fs.writeFile(jwksFile, JSON.stringify(idp.jwks));
+
+  const groupsByOid = new Map<string, string[]>();
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      const url = req.url ?? '';
+      if (url.includes('/oauth2/v2.0/token')) {
+        res.end(JSON.stringify({ access_token: 'fake-app-token', expires_in: 3600 }));
+        return;
+      }
+      const m = url.match(/\/users\/([^/]+)\/getMemberGroups/);
+      if (m) {
+        res.end(JSON.stringify({ value: groupsByOid.get(decodeURIComponent(m[1])) ?? [] }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${(server.address() as import('net').AddressInfo).port}`;
+
+  process.env.AUTH_MODE = 'local-oidc';
+  process.env.AUTH_OIDC_ISSUER = idp.issuer;
+  process.env.AUTH_OIDC_AUDIENCE = idp.audience;
+  process.env.AUTH_OIDC_JWKS_FILE = jwksFile;
+  process.env.AUTH_GROUP_RESOLVER = 'graph';
+  process.env.GRAPH_TENANT_ID = 'eval-tenant';
+  process.env.GRAPH_CLIENT_ID = 'eval-client';
+  process.env.GRAPH_CLIENT_SECRET = 'eval-secret';
+  process.env.GRAPH_BASE_URL = base;
+  process.env.GRAPH_AUTHORITY = base;
+  return { idp, server, groupsByOid };
+}
+
 /** A gold case's namespaced principals → the Entra (oid, groups) a token carries. */
 function caseToEntra(c: GoldCase): { oid: string; groups: string[] } {
   const groups: string[] = [];
@@ -179,12 +242,29 @@ async function mintCaseDelegation(
 async function main(): Promise<void> {
   const leg = process.env.EVAL_AUTH ?? 'dev-header';
   const delegationLeg = leg === 'delegation';
-  const idp =
-    leg === 'local-oidc' ? await setupLocalOidc() : delegationLeg ? await setupDelegation() : null;
+  const overageLeg = leg === 'overage';
+  const overage = overageLeg ? await setupOverage() : null;
+  const idp = overage
+    ? overage.idp
+    : leg === 'local-oidc'
+      ? await setupLocalOidc()
+      : delegationLeg
+        ? await setupDelegation()
+        : null;
 
   const gold: Gold = JSON.parse(
     await fs.readFile(path.join(process.cwd(), 'eval', 'gold.json'), 'utf8'),
   );
+
+  // Tell the fake Graph which groups to return per user — the same groups a
+  // non-overage token would carry (delegation cases are skipped in this leg).
+  if (overage) {
+    for (const c of gold.cases) {
+      if (c.delegation) continue;
+      const { oid, groups } = caseToEntra(c);
+      overage.groupsByOid.set(oid, groups);
+    }
+  }
 
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ['error', 'warn'] });
   const retrieval = app.get(RetrievalService, { strict: false });
@@ -198,6 +278,13 @@ async function main(): Promise<void> {
       return identityService.resolve({
         authorization: `Bearer ${await mintCaseDelegation(idp!, c, anchor)}`,
       });
+    }
+    if (overageLeg) {
+      // An OVERAGE token: hasgroups marker, NO groups claim — the resolver must
+      // supply the full set. If it doesn't, the case misses (recall) or leaks.
+      const { oid } = caseToEntra(c);
+      const token = await idp!.signToken({ oid, hasgroups: true });
+      return identityService.resolve({ authorization: `Bearer ${token}` });
     }
     if (idp) {
       return identityService.resolve({ authorization: `Bearer ${await mintCaseToken(idp, c)}` });
@@ -369,6 +456,10 @@ async function main(): Promise<void> {
     if (!pass) process.exitCode = 1;
   } finally {
     await app.close();
+    if (overage) {
+      overage.server.closeAllConnections?.(); // drop the resolver's keep-alive sockets
+      overage.server.close();
+    }
   }
 }
 
