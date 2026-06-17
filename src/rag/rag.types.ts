@@ -8,6 +8,16 @@ export interface RagTimings {
   totalMs: number;
 }
 
+/** Machine-checkable citation faithfulness for one answer. */
+export interface Faithfulness {
+  /** Every cited marker pointed at real evidence (no fabricated sources). */
+  allGrounded: boolean;
+  /** Count of cited markers backed by evidence. */
+  groundedCount: number;
+  /** Cited markers the model fabricated (out of evidence range) — stripped from the answer. */
+  hallucinatedCitations: number[];
+}
+
 export interface Citation {
   number: number; // matches the [n] marker in the answer text
   title: string;
@@ -30,4 +40,6 @@ export interface RagAnswer {
   usage?: TokenUsage;
   /** Per-stage latency (retrieval, generation, total). */
   timings?: RagTimings;
+  /** Citation verification: which cited markers were grounded vs fabricated. */
+  faithfulness?: Faithfulness;
 }

@@ -71,3 +71,35 @@ describe('RagService observability threading', () => {
     expect(result.usage!.totalTokens).toBe(15);
   });
 });
+
+describe('RagService faithfulness (citation verification)', () => {
+  const twoChunks = [chunk('confluence:1', 'first'), chunk('confluence:2', 'second')];
+
+  it('a fabricated citation is flagged, stripped from the answer, and excluded from citations', async () => {
+    const { rag } = ragWith(twoChunks, {
+      answer: 'The limit is 10 [1], see the appendix [9].',
+      usedCitations: [1, 9],
+    });
+    const result = await rag.answer('limit?', { identity });
+
+    expect(result.answer).toBe('The limit is 10 [1], see the appendix.'); // [9] stripped
+    expect(result.citations.map((c) => c.number)).toEqual([1]); // only the grounded one
+    expect(result.faithfulness).toEqual({ allGrounded: false, groundedCount: 1, hallucinatedCitations: [9] });
+    expect(result.notFound).toBe(false); // a grounded citation remains
+  });
+
+  it('an answer citing ONLY fabricated sources abstains (notFound)', async () => {
+    const { rag } = ragWith(twoChunks, { answer: 'Per [7] and [8].', usedCitations: [7, 8] });
+    const result = await rag.answer('q', { identity });
+
+    expect(result.notFound).toBe(true);
+    expect(result.citations).toEqual([]);
+    expect(result.faithfulness!.hallucinatedCitations).toEqual([7, 8]);
+  });
+
+  it('all citations grounded → allGrounded true', async () => {
+    const { rag } = ragWith(twoChunks, { answer: 'A [1] and B [2].', usedCitations: [1, 2] });
+    const result = await rag.answer('q', { identity });
+    expect(result.faithfulness).toEqual({ allGrounded: true, groundedCount: 2, hallucinatedCitations: [] });
+  });
+});
