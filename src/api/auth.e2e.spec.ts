@@ -91,14 +91,16 @@ describe('REST auth boundary (dev-header mode)', () => {
     await request(app.getHttpServer()).post('/query').send({ question: 'anything' }).expect(201);
   });
 
-  it('POST /feedback records a rating (201)', async () => {
-    // Note: DTO validation (rating ∈ {up,down}) runs via the main.ts global
-    // ValidationPipe; the Test-module app here exercises routing + auth, not the
-    // pipe. The @IsIn constraint is unit-covered by the DTO + verified in prod.
+  it('POST /feedback records a rating (201); a bad rating is rejected (400)', async () => {
     await request(app.getHttpServer())
       .post('/feedback')
       .send({ query: 'salary bands?', rating: 'up', chunkIds: ['confluence:HR-SALARY-BANDS'] })
       .expect(201);
+    // Validation now applies in every boot path (APP_PIPE), so an invalid rating is rejected.
+    await request(app.getHttpServer())
+      .post('/feedback')
+      .send({ query: 'x', rating: 'meh' })
+      .expect(400);
   });
 });
 
