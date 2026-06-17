@@ -412,6 +412,13 @@ every environment — the foundation for a cost model. The **raw query is never 
 Art. 9 data): events carry a short `queryHash` + `queryChars`; set `OBSERVABILITY_LOG_QUERY_TEXT=true` to
 include the text in a safe debugging environment.
 
+**Citation faithfulness.** Every answer is citation-verified (machine-checkable, no model needed): a `[n]`
+marker that points outside the evidence actually provided is a **fabricated** source — it is stripped from
+the answer, excluded from the citations, and reported on `RagAnswer.faithfulness` (`allGrounded`,
+`hallucinatedCitations`). An answer left with no grounded citation abstains (`notFound`). This closes the
+deterministic half of groundedness; verifying that each *claim* is entailed by its cited evidence (an NLI
+step) needs a model and is a follow-up.
+
 ## Project structure
 
 ```

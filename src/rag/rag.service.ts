@@ -4,7 +4,8 @@ import { LLM_PROVIDER, LlmProvider, EvidenceItem, TokenUsage } from '../llm/llm.
 import { emitQueryEvent, queryHash } from '../observability/query-log';
 import { RetrievalService } from '../retrieval/retrieval.service';
 import { RetrievalOptions, RetrievedChunk } from '../retrieval/retrieval.types';
-import { Citation, RagAnswer } from './rag.types';
+import { verifyCitations } from './faithfulness';
+import { Citation, Faithfulness, RagAnswer } from './rag.types';
 
 /**
  * The RAG/agent layer (plan §6.5). Retrieves permission-filtered evidence, asks
@@ -30,7 +31,7 @@ export class RagService {
 
     if (chunks.length === 0) {
       const timings = { retrievalMs: ms(t0, tRetrieved), generationMs: 0, totalMs: ms(t0, tRetrieved) };
-      this.observe(question, options, [], 0, true, undefined, timings);
+      this.observe(question, options, [], 0, true, undefined, timings, undefined);
       return { question, answer: 'Not found in the connected sources.', citations: [], evidence: [], notFound: true, timings };
     }
 
@@ -41,14 +42,17 @@ export class RagService {
       content: c.content,
     }));
 
-    const { answer, usedCitations, usage } = await this.llm.generateGroundedAnswer(question, evidence);
+    const { answer: rawAnswer, usage } = await this.llm.generateGroundedAnswer(question, evidence);
     const tGenerated = process.hrtime.bigint();
 
-    const citations: Citation[] = usedCitations
+    // Citation verification (faithfulness): only markers backed by real evidence
+    // become citations; fabricated ones are flagged + stripped from the answer.
+    const check = verifyCitations(rawAnswer, evidence.length);
+    const citations: Citation[] = check.grounded
       .map((n) => chunks[n - 1])
       .filter((c): c is RetrievedChunk => Boolean(c))
       .map((c, idx) => ({
-        number: usedCitations[idx],
+        number: check.grounded[idx],
         title: c.title,
         headingPath: c.headingPath,
         sourceSystem: c.sourceSystem,
@@ -56,15 +60,24 @@ export class RagService {
         deepLink: c.deepLink,
       }));
 
-    const notFound = usedCitations.length === 0;
+    const faithfulness: Faithfulness = {
+      allGrounded: check.hallucinated.length === 0,
+      groundedCount: check.grounded.length,
+      hallucinatedCitations: check.hallucinated,
+    };
+    if (!faithfulness.allGrounded) {
+      this.log.warn(`answer cited fabricated sources [${check.hallucinated.join(',')}] — stripped from the answer`);
+    }
+
+    const notFound = check.grounded.length === 0;
     const timings = {
       retrievalMs: ms(t0, tRetrieved),
       generationMs: ms(tRetrieved, tGenerated),
       totalMs: ms(t0, tGenerated),
     };
-    this.observe(question, options, chunks, citations.length, notFound, usage, timings);
+    this.observe(question, options, chunks, citations.length, notFound, usage, timings, faithfulness);
 
-    return { question, answer, citations, evidence: chunks, notFound, usage, timings };
+    return { question, answer: check.cleanedAnswer, citations, evidence: chunks, notFound, usage, timings, faithfulness };
   }
 
   /** One structured JSON event per answer — chunk ids, cited count, timings,
@@ -77,6 +90,7 @@ export class RagService {
     notFound: boolean,
     usage: TokenUsage | undefined,
     timings: { retrievalMs: number; generationMs: number; totalMs: number },
+    faithfulness: Faithfulness | undefined,
   ): void {
     emitQueryEvent(this.log, {
       event: 'rag',
@@ -91,6 +105,9 @@ export class RagService {
       notFound,
       ...(usage
         ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, totalTokens: usage.totalTokens }
+        : {}),
+      ...(faithfulness && faithfulness.hallucinatedCitations.length > 0
+        ? { hallucinatedCitations: faithfulness.hallucinatedCitations }
         : {}),
       ...timings,
     });
