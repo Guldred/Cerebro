@@ -71,6 +71,11 @@ describe('REST auth boundary (dev-header mode)', () => {
     expect(res.body.authMode).toBe('dev-header');
   });
 
+  it('GET /health/ready is @Public — 200 when the store is reachable', async () => {
+    const res = await request(app.getHttpServer()).get('/health/ready').expect(200);
+    expect(res.body).toEqual({ ready: true, db: true });
+  });
+
   it('GET /.well-known/oauth-protected-resource is @Public — 200 (RFC 9728 metadata)', async () => {
     const res = await request(app.getHttpServer())
       .get('/.well-known/oauth-protected-resource')
