@@ -46,6 +46,8 @@ export class GitHubConnector implements Connector {
   readonly sourceSystem = 'github';
   private readonly apiUrl: string;
   private readonly docExtensions: Set<string>;
+  /** Repos the most recent initialCrawl() could not read (see skippedScopes). */
+  private lastSkipped: string[] = [];
 
   constructor(
     private readonly config: GitHubConfig,
@@ -59,11 +61,33 @@ export class GitHubConnector implements Connector {
   }
 
   async initialCrawl(): Promise<SourceDocument[]> {
+    this.lastSkipped = [];
     const docs: SourceDocument[] = [];
     for (const slug of this.config.repos) {
-      docs.push(...(await this.crawlRepo(slug)));
+      try {
+        docs.push(...(await this.crawlRepo(slug)));
+      } catch (err) {
+        // A repo this token can't read (404/403), a renamed/deleted repo, or a
+        // transient API error must NOT abort the whole crawl — skip it and record
+        // it so the caller treats the crawl as PARTIAL (no reconcile-delete). Any
+        // failure is handled identically; both out-of-scope and transient fail safe.
+        console.warn(`[github] skipping ${slug}: ${String(err)}`);
+        this.lastSkipped.push(slug);
+      }
+    }
+    if (this.lastSkipped.length === this.config.repos.length) {
+      // EVERY repo failed — a broken token/config, not a partial result. Fail loud
+      // rather than silently ingest nothing.
+      throw new Error(
+        `GitHub crawl failed for all ${this.config.repos.length} repo(s): ${this.lastSkipped.join(', ')}`,
+      );
     }
     return docs;
+  }
+
+  /** Repos initialCrawl() skipped this run (non-empty ⇒ the crawl was partial). */
+  skippedScopes(): string[] {
+    return this.lastSkipped;
   }
 
   async deltaSync(cursor: string | null): Promise<SyncResult> {

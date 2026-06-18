@@ -144,4 +144,44 @@ describe('GitHubConnector', () => {
       'github-repo:Guldred/Cerebro',
     ]);
   });
+
+  describe('partial crawl resilience (a repo the token cannot read)', () => {
+    /** OK for everything except any URL for `blocked`, which 404s. */
+    function fetchBlocking(blocked: string) {
+      const ok = makeFetch();
+      return jest.fn(async (url: string, init?: unknown) => {
+        if (url.includes(`/repos/${blocked}`)) {
+          return { ok: false, status: 404, text: async () => '{"message":"Not Found"}', json: async () => ({}) };
+        }
+        return ok(url, init);
+      });
+    }
+
+    it('skips a repo it cannot read, crawls the rest, and reports it via skippedScopes', async () => {
+      const c = new GitHubConnector(
+        { token: 'pat', repos: ['Guldred/Cerebro', 'Guldred/Blocked'] },
+        fetchBlocking('Guldred/Blocked') as never,
+      );
+      const docs = await c.initialCrawl();
+
+      // Cerebro's docs are present; nothing for the blocked repo.
+      expect(docs.length).toBeGreaterThan(0);
+      expect(docs.every((d) => !d.externalId.startsWith('Guldred/Blocked'))).toBe(true);
+      expect(c.skippedScopes()).toEqual(['Guldred/Blocked']); // partial → caller must not reconcile-delete
+    });
+
+    it('throws when EVERY repo fails (a broken token) instead of silently ingesting nothing', async () => {
+      const c = new GitHubConnector(
+        { token: 'bad', repos: ['Guldred/A', 'Guldred/B'] },
+        fetchBlocking('Guldred') as never, // blocks every /repos/Guldred/*
+      );
+      await expect(c.initialCrawl()).rejects.toThrow(/failed for all 2 repo/i);
+    });
+
+    it('a fully successful crawl reports no skipped scopes', async () => {
+      const c = new GitHubConnector(config, makeFetch() as never);
+      await c.initialCrawl();
+      expect(c.skippedScopes()).toEqual([]);
+    });
+  });
 });
