@@ -31,4 +31,14 @@ export interface Connector {
    * periodic ACL refresh and the optional late-binding check (§7).
    */
   resolvePermissions(externalId: string): Promise<string[]>;
+
+  /**
+   * Scopes (e.g. repos) the MOST RECENT initialCrawl() could not read and
+   * skipped. A non-empty result means that crawl was PARTIAL — the caller MUST
+   * NOT reconcile-delete, because a crawl that never saw a scope cannot conclude
+   * its documents are gone (a transient outage or a narrower token would
+   * otherwise wipe real data). Connectors that always crawl completely omit this
+   * (treated as []). Valid immediately after initialCrawl(); reset on each call.
+   */
+  skippedScopes?(): string[];
 }

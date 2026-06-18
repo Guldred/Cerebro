@@ -19,6 +19,9 @@ export interface IngestStats {
   quarantined: number;
   /** Documents whose ingestion threw — dead-lettered to ingestion_dlq, crawl continued. */
   failed: number;
+  /** Scopes (e.g. repos) the connector could not read and skipped — a non-empty
+   *  list means the crawl was PARTIAL and reconciliation deletion was skipped. */
+  skippedScopes: string[];
 }
 
 export interface AclRefreshStats {
@@ -255,7 +258,7 @@ export class IngestionService {
   // ── resilient per-document ingest + dead-letter queue (Plan_Review P1.5) ─────
 
   private newStats(): IngestStats {
-    return { ingested: 0, skipped: 0, deleted: 0, chunks: 0, aclUpdated: 0, quarantined: 0, failed: 0 };
+    return { ingested: 0, skipped: 0, deleted: 0, chunks: 0, aclUpdated: 0, quarantined: 0, failed: 0, skippedScopes: [] };
   }
 
   /**
@@ -340,7 +343,9 @@ export class IngestionService {
    *  (tombstone handling — plan §6.1). */
   async runInitialCrawl(connector: Connector): Promise<IngestStats> {
     const docs = await connector.initialCrawl();
+    const skippedScopes = connector.skippedScopes?.() ?? [];
     const stats = this.newStats();
+    stats.skippedScopes = skippedScopes;
 
     const seen = new Set<string>();
     for (const doc of docs) {
@@ -348,21 +353,33 @@ export class IngestionService {
       await this.ingestOne(doc, stats);
     }
 
-    const stored = await this.db.query<{ id: string }>(
-      'SELECT id FROM documents WHERE source_system = ANY($1)',
-      [[...new Set(docs.map((d) => d.sourceSystem)).add(connector.sourceSystem)]],
-    );
-    for (const row of stored.rows) {
-      if (!seen.has(row.id)) {
-        await this.db.query('DELETE FROM documents WHERE id = $1', [row.id]);
-        await this.clearDlq(row.id); // a reconciled-away doc leaves no ghost DLQ row
-        stats.deleted++;
+    if (skippedScopes.length > 0) {
+      // PARTIAL crawl — the connector could not read some scopes. Do NOT
+      // reconcile-delete: a crawl that never saw a scope cannot conclude its docs
+      // are gone (a narrower token / transient outage would otherwise wipe real
+      // data). Stale docs of crawled scopes are cleaned on the next COMPLETE crawl.
+      this.log.warn(
+        `initialCrawl(${connector.sourceSystem}): PARTIAL — could not read ${skippedScopes.length} ` +
+          `scope(s) [${skippedScopes.join(', ')}]; reconciliation (stale-doc deletion) SKIPPED to protect them.`,
+      );
+    } else {
+      const stored = await this.db.query<{ id: string }>(
+        'SELECT id FROM documents WHERE source_system = ANY($1)',
+        [[...new Set(docs.map((d) => d.sourceSystem)).add(connector.sourceSystem)]],
+      );
+      for (const row of stored.rows) {
+        if (!seen.has(row.id)) {
+          await this.db.query('DELETE FROM documents WHERE id = $1', [row.id]);
+          await this.clearDlq(row.id); // a reconciled-away doc leaves no ghost DLQ row
+          stats.deleted++;
+        }
       }
     }
 
     this.log.log(
       `initialCrawl(${connector.sourceSystem}): ingested=${stats.ingested} skipped=${stats.skipped} ` +
-        `deleted=${stats.deleted} chunks=${stats.chunks} failed=${stats.failed}`,
+        `deleted=${stats.deleted} chunks=${stats.chunks} failed=${stats.failed}` +
+        (skippedScopes.length ? ` unreadable=[${skippedScopes.join(',')}]` : ''),
     );
     return stats;
   }

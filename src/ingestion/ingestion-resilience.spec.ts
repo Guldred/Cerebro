@@ -20,8 +20,9 @@ function doc(externalId: string, title: string): SourceDocument {
 
 /** A db double routing the queries runInitialCrawl/sync emit, recording the
  *  security-relevant ones (document inserts, DLQ writes/clears, cursor saves). */
-function harness(opts: { storedCursor?: string | null } = {}) {
+function harness(opts: { storedCursor?: string | null; storedDocIds?: string[] } = {}) {
   const docInserts: string[] = [];
+  const docDeletes: string[] = [];
   const dlqWrites: { id: string; error: string }[] = [];
   const dlqClears: string[] = [];
   const cursorSaves: (string | null)[] = [];
@@ -29,7 +30,13 @@ function harness(opts: { storedCursor?: string | null } = {}) {
   const run = async (sql: string, params: unknown[] = []) => {
     if (sql.includes('suppressed_documents')) return { rows: [], rowCount: 0 };
     if (sql.includes('SELECT d.content_hash')) return { rows: [] }; // every doc is new → full ingest
-    if (sql.includes('SELECT id FROM documents WHERE source_system')) return { rows: [] }; // no reconcile deletes
+    if (sql.includes('SELECT id FROM documents WHERE source_system')) {
+      return { rows: (opts.storedDocIds ?? []).map((id) => ({ id })) }; // what reconciliation sees stored
+    }
+    if (/DELETE FROM documents WHERE id/.test(sql)) {
+      docDeletes.push(params[0] as string); // reconciliation deletes (must NOT fire on a partial crawl)
+      return { rowCount: 1 };
+    }
     if (sql.includes('INSERT INTO ingestion_dlq')) {
       dlqWrites.push({ id: params[0] as string, error: params[3] as string });
       return { rowCount: 1 };
@@ -65,10 +72,12 @@ function harness(opts: { storedCursor?: string | null } = {}) {
   };
 
   const config = { ingestion: { embedMaxBatch: 96 } } as CerebroConfig;
-  return { service: new IngestionService(config, db, embedder), docInserts, dlqWrites, dlqClears, cursorSaves };
+  return { service: new IngestionService(config, db, embedder), docInserts, docDeletes, dlqWrites, dlqClears, cursorSaves };
 }
 
-function connector(over: Partial<Connector> & { delta?: Partial<SyncResult>; deltaThrows?: boolean } = {}): Connector {
+function connector(
+  over: Partial<Connector> & { delta?: Partial<SyncResult>; deltaThrows?: boolean; skipped?: string[] } = {},
+): Connector {
   return {
     sourceSystem: 'test',
     initialCrawl: over.initialCrawl ?? (async () => []),
@@ -79,8 +88,36 @@ function connector(over: Partial<Connector> & { delta?: Partial<SyncResult>; del
         return { documents: [], deletedExternalIds: [], cursor: 'cursor-2', ...over.delta };
       }),
     resolvePermissions: async () => [],
+    ...(over.skipped !== undefined ? { skippedScopes: () => over.skipped! } : {}),
   };
 }
+
+describe('IngestionService partial-crawl safety — a skipped scope is never reconcile-deleted', () => {
+  // The decisive data-loss test: a repo the connector COULD NOT read this run
+  // (skippedScopes) must keep its previously-ingested docs — a crawl that never
+  // saw a scope cannot conclude its docs are gone (a narrower token / outage).
+  it('PARTIAL crawl → reconciliation is skipped; the unreadable scope keeps its docs', async () => {
+    const h = harness({ storedDocIds: ['test:blocked-repo:old-doc'] }); // from a prior complete crawl
+    const stats = await h.service.runInitialCrawl(
+      connector({
+        initialCrawl: async () => [doc('readable', 'Alpha')], // only the repo it COULD read
+        skipped: ['blocked-repo'], // the one it could not
+      }),
+    );
+    expect(stats.skippedScopes).toEqual(['blocked-repo']);
+    expect(stats.deleted).toBe(0);
+    expect(h.docDeletes).toEqual([]); // the blocked repo's doc SURVIVES — no data loss
+  });
+
+  it('COMPLETE crawl → reconciliation still runs; a stored doc no longer seen is deleted', async () => {
+    const h = harness({ storedDocIds: ['test:stale-doc'] });
+    const stats = await h.service.runInitialCrawl(
+      connector({ initialCrawl: async () => [doc('fresh', 'Beta')], skipped: [] }),
+    );
+    expect(stats.deleted).toBe(1);
+    expect(h.docDeletes).toEqual(['test:stale-doc']);
+  });
+});
 
 describe('IngestionService resilience — a poison document does not abort the crawl', () => {
   it('ingests the good docs, dead-letters the failure, and continues', async () => {
