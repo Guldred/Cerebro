@@ -34,7 +34,14 @@ export function buildConnector(): Connector {
         baseUrl: process.env.GITLAB_BASE_URL,
       });
     case 'sample':
-      return new SampleConnector(path.join(process.cwd(), 'seed'));
+      // SAMPLE_SEED_DIR points the file-based sample connector at an alternate
+      // corpus (e.g. demo/acme-corp) without touching the canonical seed/ used
+      // by eval/CI. Default preserves today's behaviour.
+      return new SampleConnector(
+        process.env.SAMPLE_SEED_DIR
+          ? path.resolve(process.env.SAMPLE_SEED_DIR)
+          : path.join(process.cwd(), 'seed'),
+      );
     default:
       throw new Error(`Unknown SEED_CONNECTOR: ${which}`);
   }

@@ -1,0 +1,25 @@
+{
+  "description": "Synthetic-company demo mapping fixture. Maps source-native principals (stored on chunks) to the Entra principals callers actually hold. Loaded via PRINCIPAL_MAPPINGS_FILE=demo/acme-corp/principal-mappings.json. NOTE: confluence-group:board-confidential is DELIBERATELY ABSENT — an unmapped source group is invisible to everyone (fail-closed). And confluence-group:security IS mapped here, yet seed/.../security-incident.md is quarantined (acl_status: failed), so even an entra-group:security caller sees nothing — quarantine overrides a valid mapping.",
+  "mappings": [
+    {
+      "source_principal": "confluence-group:hr",
+      "entra_principal": "entra-group:hr",
+      "note": "HR may read salary bands"
+    },
+    {
+      "source_principal": "confluence-group:finance",
+      "entra_principal": "entra-group:finance",
+      "note": "Finance may read the Q3 budget / Project Northwind"
+    },
+    {
+      "source_principal": "gitlab-project:acme/platform",
+      "entra_principal": "entra-group:engineering",
+      "note": "Engineering may read the platform deployment/rollback runbook"
+    },
+    {
+      "source_principal": "confluence-group:security",
+      "entra_principal": "entra-group:security",
+      "note": "Mapping EXISTS — but the security-incident doc is quarantined (acl_status: failed), so even this mapped caller sees nothing until resolution succeeds"
+    }
+  ]
+}
