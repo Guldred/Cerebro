@@ -61,21 +61,34 @@ Mappings live in `principal-mappings.json`. Two deliberate gaps:
 - **No-leak under a wider window** — raising `RETRIEVAL_TOP_K` returns more
   *authorized* chunks but never a restricted one (ACL is a SQL pre-filter).
 
-## Cross-lingual finding (honest scope)
+## Cross-lingual finding (verified by layer — the gap is generation-bound)
 
-`bge-m3` is multilingual, and this corpus surfaces exactly where that does and
-doesn't carry through the full pipeline:
+`bge-m3` is multilingual, and this corpus pinpoints where the cross-lingual path
+does and doesn't hold. The decisive experiment: an English question whose only
+answer is in the German Datenschutz doc.
 
-- **Embeddings: excellent.** An *English* query ranks the *German* Datenschutz
-  chunks **#1–3 by vector similarity**.
-- **Hybrid RRF fusion: under-weights it.** A pure cross-lingual hit shares zero
-  tokens with the query, so the lexical (FTS) arm contributes nothing and RRF
-  ranks it below mediocre-but-bilingual English chunks — it lands mid-pack.
-- **Generation: in-language is reliable, cross-language is not (with mistral).** A
-  *German* question over German evidence yields a perfect grounded German answer;
-  an *English* question over (buried) German evidence makes mistral abstain rather
-  than synthesise across languages — the correct fail-safe, but not a full answer.
+- **Embeddings: excellent.** The English query ranks the German chunks **#1–3 by
+  vector similarity** — cross-lingual *retrieval* works.
+- **Hybrid RRF ranking: under-weights a pure cross-lingual hit.** With zero lexical
+  overlap it scores in only one arm, so RRF ranks it mid-pack (≈ fused-pos 10–13)
+  behind bilingual English chunks. This affects `/search` *ordering* — but with a
+  sufficient `top_k` the chunk still reaches the LLM (verified: at `top_k=16` the
+  German chunks are inside the evidence window).
+- **Generation is the binding constraint.** With the German evidence *in* the
+  window, **mistral-7B still abstained** ("Not found") — it would not synthesise an
+  English answer from German evidence (the correct fail-safe, but not an answer).
+  A stronger multilingual model closes it: with **`LLM_MODEL=qwen3:8b`** the same
+  English question returns a **grounded, cited answer** from the German doc (here in
+  the source language; full target-language translation scales with model strength).
 
-Levers to close the cross-lingual gap (future work): weight the vector arm / a
-language-aware fusion, add a cross-encoder reranker to lift the cross-lingual hit,
-or use a stronger multilingual generation model.
+So the end-to-end answer gap is **generation-bound, not retrieval-bound** — closed
+by model choice (config), not a ranking change. A retrieval tweak (e.g. guaranteed
+vector-arm representation to lift the cross-lingual hit in `/search`) is a *separate*,
+optional ordering improvement; on its own it would **not** have closed the answer gap,
+as the `top_k=16` test shows. Run the demo with `LLM_MODEL=qwen3:8b ./run-demo.sh` to
+see the cross-lingual answer succeed.
+
+> Honest caveat on validation: the zero-key eval uses the deterministic `fake`
+> embedder, which cannot reproduce cross-lingual retrieval — so eval-green proves
+> *non-regression only*, never that the cross-lingual behaviour itself is gated. A
+> real CI gate would need a bge-m3 eval leg with EN↔DE query→expected-doc pairs.

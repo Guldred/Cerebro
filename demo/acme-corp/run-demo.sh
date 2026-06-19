@@ -10,6 +10,11 @@
 #   bge-m3 (embeddings) + a chat model (default mistral:latest). Override the
 #   chat model with LLM_MODEL=... ./run-demo.sh
 #
+# Cross-lingual note: the permission proofs work on any model. The EN-question /
+# German-evidence answer is GENERATION-bound — mistral-7B abstains, a stronger
+# multilingual model answers. Run `LLM_MODEL=qwen3:8b ./run-demo.sh` to see the
+# cross-lingual answer succeed (grounded + cited).
+#
 # Usage:  ./demo/acme-corp/run-demo.sh
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root

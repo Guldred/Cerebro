@@ -77,18 +77,20 @@ ask("public (no HR)", "public", "What does Band E5 pay and how big is the retent
 ask("entra-group:finance", "entra-group:finance", "What is the approved Q3 budget for Project Northwind?")
 
 print("=" * 80)
-print("CROSS-LINGUAL  (bge-m3 multilingual embeddings)")
+llm = urllib.request.urlopen(API + "/health", timeout=10)
+llm_model = json.load(llm).get("llm", {}).get("model", "?")
+print(f"CROSS-LINGUAL  (bge-m3 multilingual embeddings; LLM in use: {llm_model})")
 print("=" * 80)
-# Embeddings bridge languages: an EN query ranks the DE chunks #1 by vector similarity.
+# Layer 1 — embeddings bridge languages: an EN query ranks the DE chunks #1 by vector.
 r = post("/search", {"query": "how quickly must we respond to a data deletion request", "topK": 16}, "public")["results"]
 de = [(i, round(x["score"], 4), x.get("vectorRank"), x.get("ftsRank")) for i, x in enumerate(r, 1) if "DATENSCHUTZ" in x["documentId"]]
 print(f"EN /search -> German doc chunks (fusedPos, rrf, vectorRank, ftsRank): {de}")
-print("  (vectorRank ~1-3 = cross-lingual embedding match is excellent; ftsRank None = zero")
-print("   lexical overlap, so RRF under-weights it vs bilingual English chunks.)\n")
-# The honest failure: EN question + (RRF-buried) DE evidence -> mistral abstains
-# rather than synthesise across languages. Correct fail-safe, but not a full answer.
-ask("public — EN question, DE evidence (RRF-buried)", "public",
+print("  vectorRank ~1-3 => cross-lingual retrieval is excellent; ftsRank None => zero lexical")
+print("  overlap, so RRF ranks it mid-pack -- but at top_k>=16 it still reaches the LLM.\n")
+# Layer 2 — generation is the binding constraint. The SAME EN question over (in-window)
+# German evidence ABSTAINS on mistral-7B but ANSWERS (grounded + cited) on qwen3:8b.
+ask(f"public — EN question, DE evidence ({llm_model})", "public",
     "How quickly must we respond to a data deletion or access request?")
-# Generation is reliable when query + evidence share a language:
-ask("public — DE question, DE evidence (works)", "public",
+# Control: in-language generation is reliable on any multilingual model.
+ask("public — DE question, DE evidence (control)", "public",
     "Wie schnell müssen wir auf einen Antrag auf Löschung oder Auskunft reagieren?")
