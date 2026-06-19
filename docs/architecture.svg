@@ -1,0 +1,104 @@
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif" role="img">
+  <title>How Cerebro Works</title>
+  <desc>Cerebro indexes every source with a trusted robot reader that captures each item's permissions, then enforces those permissions at query time using a verified identity.</desc>
+  <rect x="0" y="0" width="960" height="600" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="480" y="42" text-anchor="middle" font-size="26" font-weight="bold" fill="#0f172a">How Cerebro Works</text>
+  <text x="480" y="67" text-anchor="middle" font-size="13.5" fill="#475569">A permission-aware knowledge layer: one trusted copy of every source, access decided by a verified identity.</text>
+  <line x1="36" y1="84" x2="924" y2="84" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- ===== PHASE 1: INGEST ===== -->
+  <text x="40" y="113" font-size="15" font-weight="bold" fill="#047857">1 — INFORMATION GOES IN</text>
+  <text x="250" y="113" font-size="12" fill="#64748b">(ingestion · scheduled)</text>
+
+  <!-- Sources -->
+  <g>
+    <rect x="40" y="130" width="150" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="115" y="150" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">GitHub</text>
+    <text x="115" y="166" text-anchor="middle" font-size="10.5" fill="#64748b">code + docs</text>
+    <rect x="40" y="184" width="150" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="115" y="204" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">Confluence</text>
+    <text x="115" y="220" text-anchor="middle" font-size="10.5" fill="#64748b">wiki pages</text>
+    <rect x="40" y="238" width="150" height="44" rx="6" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="115" y="258" text-anchor="middle" font-size="13" font-weight="bold" fill="#1e293b">GitLab</text>
+    <text x="115" y="274" text-anchor="middle" font-size="10.5" fill="#64748b">projects</text>
+    <text x="115" y="300" text-anchor="middle" font-size="10.5" font-style="italic" fill="#64748b">public + private</text>
+  </g>
+
+  <!-- arrow sources -> robot -->
+  <line x1="192" y1="206" x2="254" y2="206" stroke="#64748b" stroke-width="2" marker-end="url(#ah)"/>
+  <text x="223" y="198" text-anchor="middle" font-size="10" fill="#64748b">read all</text>
+
+  <!-- Robot reader -->
+  <rect x="258" y="150" width="222" height="120" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="369" y="180" text-anchor="middle" font-size="15" font-weight="bold" fill="#065f46">Robot reader</text>
+  <text x="369" y="202" text-anchor="middle" font-size="11.5" fill="#065f46">a service account with</text>
+  <text x="369" y="218" text-anchor="middle" font-size="11.5" fill="#065f46">broad READ-ONLY access</text>
+  <line x1="280" y1="230" x2="458" y2="230" stroke="#a7f3d0" stroke-width="1"/>
+  <text x="369" y="249" text-anchor="middle" font-size="11" fill="#047857">reads · chunks · embeds, and</text>
+  <text x="369" y="264" text-anchor="middle" font-size="11" fill="#047857">captures each item's permission</text>
+
+  <!-- arrow robot -> DB -->
+  <line x1="482" y1="210" x2="548" y2="210" stroke="#64748b" stroke-width="2" marker-end="url(#ah)"/>
+  <text x="515" y="202" text-anchor="middle" font-size="10" fill="#64748b">store</text>
+
+  <!-- Database (the middle layer) -->
+  <rect x="550" y="132" width="256" height="158" rx="10" fill="#fffbeb" stroke="#d97706" stroke-width="2.5"/>
+  <text x="678" y="160" text-anchor="middle" font-size="16" font-weight="bold" fill="#92400e">Cerebro Database</text>
+  <text x="678" y="179" text-anchor="middle" font-size="11" fill="#92400e">the permission-tagged copy</text>
+  <text x="568" y="206" font-size="11" fill="#78350f">&#128274;  Salary doc  —  HR only</text>
+  <text x="568" y="230" font-size="11" fill="#78350f">&#127760;  README  —  everyone</text>
+  <text x="568" y="254" font-size="11" fill="#78350f">&#128274;  Your ticket  —  you only</text>
+  <text x="678" y="279" text-anchor="middle" font-size="10.5" font-style="italic" fill="#b45309">can't resolve a permission? → tagged invisible</text>
+
+  <!-- ===== PHASE 2: QUERY ===== -->
+  <text x="40" y="352" font-size="15" font-weight="bold" fill="#4338ca">2 — ANSWERS COME OUT</text>
+  <text x="252" y="352" font-size="12" fill="#64748b">(every question)</text>
+
+  <!-- You -->
+  <rect x="40" y="378" width="130" height="78" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5"/>
+  <text x="105" y="413" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#3730a3">You /</text>
+  <text x="105" y="431" text-anchor="middle" font-size="13.5" font-weight="bold" fill="#3730a3">your agent</text>
+  <line x1="172" y1="417" x2="210" y2="417" stroke="#64748b" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- Signed token -->
+  <rect x="214" y="378" width="180" height="78" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5"/>
+  <text x="304" y="404" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#3730a3">Signed identity token</text>
+  <text x="304" y="422" text-anchor="middle" font-size="10.5" fill="#4338ca">from Entra / OIDC</text>
+  <text x="304" y="438" text-anchor="middle" font-size="10.5" font-style="italic" fill="#4338ca">— cannot be forged</text>
+  <line x1="396" y1="417" x2="434" y2="417" stroke="#64748b" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- Verify -->
+  <rect x="438" y="378" width="180" height="78" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5"/>
+  <text x="528" y="404" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#3730a3">Cerebro verifies it</text>
+  <text x="528" y="422" text-anchor="middle" font-size="10.5" fill="#4338ca">and expands you to</text>
+  <text x="528" y="438" text-anchor="middle" font-size="10.5" fill="#4338ca">the tags you hold</text>
+  <line x1="620" y1="417" x2="658" y2="417" stroke="#64748b" stroke-width="2" marker-end="url(#ah)"/>
+
+  <!-- Filter -->
+  <rect x="662" y="378" width="180" height="78" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.5"/>
+  <text x="752" y="404" text-anchor="middle" font-size="12.5" font-weight="bold" fill="#3730a3">Filter the copy</text>
+  <text x="752" y="422" text-anchor="middle" font-size="10.5" fill="#4338ca">keep only pieces</text>
+  <text x="752" y="438" text-anchor="middle" font-size="10.5" fill="#4338ca">whose tag you hold</text>
+
+  <!-- DB -> Filter (reads the copy) -->
+  <line x1="752" y1="290" x2="752" y2="376" stroke="#d97706" stroke-width="2" marker-end="url(#ah2)"/>
+  <text x="762" y="336" font-size="10" fill="#b45309">reads the copy</text>
+
+  <!-- return: grounded answer back to You -->
+  <polyline points="700,456 700,492 110,492 110,458" fill="none" stroke="#4f46e5" stroke-width="2" marker-end="url(#ah3)"/>
+  <text x="405" y="486" text-anchor="middle" font-size="12" font-weight="bold" fill="#4338ca">grounded answer + clickable source links</text>
+
+  <!-- Footer principles -->
+  <line x1="36" y1="522" x2="924" y2="522" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="60" y="548" font-size="12" fill="#334155">&#128272;  Identity is proven, not claimed</text>
+  <text x="378" y="548" font-size="12" fill="#334155">&#127991;&#65039;  Access = a shared tag (no match → invisible)</text>
+  <text x="742" y="548" font-size="12" fill="#334155">&#128683;  Unknown caller → only public</text>
+
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker>
+    <marker id="ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#d97706"/></marker>
+    <marker id="ah3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#4f46e5"/></marker>
+  </defs>
+</svg>

@@ -19,7 +19,12 @@ import { buildConnector } from './connector-factory';
  * schema CHECKs reject malformed or public-granting rows at the DB layer.
  */
 async function syncPrincipalMappings(db: DatabaseService): Promise<void> {
-  const file = path.join(process.cwd(), 'seed', 'principal-mappings.json');
+  // PRINCIPAL_MAPPINGS_FILE lets an alternate corpus (e.g. demo/acme-corp) ship
+  // its own mapping fixture without touching the canonical seed/ one. Default
+  // preserves today's behaviour.
+  const file = process.env.PRINCIPAL_MAPPINGS_FILE
+    ? path.resolve(process.env.PRINCIPAL_MAPPINGS_FILE)
+    : path.join(process.cwd(), 'seed', 'principal-mappings.json');
   const raw = await fs.readFile(file, 'utf8').catch(() => null);
   if (raw === null) return;
 
